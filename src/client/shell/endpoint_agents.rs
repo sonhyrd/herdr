@@ -23,7 +23,7 @@ pub(super) fn render_collapsed(
             rect.width,
             &format!(
                 "{initial}{}",
-                status_icon(row.agent.status, config.status_indicators)
+                status_icon_frame(row.agent.status, config.status_indicators, config.chrome, 0)
             ),
             Style::default()
                 .fg(if row.stale {
@@ -72,7 +72,7 @@ pub(super) fn render_expanded(
         hits,
         |row| row.agent.rows.len(),
         |buffer, rect, row, hits| {
-            super::agent_sidebar::render_agent_row(buffer, rect, &row.agent, config);
+            super::agent_sidebar::render_agent_row(buffer, rect, &row.agent, config, 0);
             if row.stale {
                 buffer.set_style(
                     rect,

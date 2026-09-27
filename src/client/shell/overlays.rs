@@ -41,6 +41,7 @@ pub(crate) fn render_client_overlay(
     active_endpoint_id: &ClientEndpointId,
     k: &LiveKeybindConfig,
     p: &Palette,
+    modern: bool,
 ) -> Option<OverlayRender> {
     if !matches!(
         o,
@@ -56,28 +57,34 @@ pub(crate) fn render_client_overlay(
         }
     }
     match o {
-        ClientShellOverlay::Onboarding => render_onboarding_overlay(b, p),
-        ClientShellOverlay::ProductAnnouncement(v) => render_product_announcement_overlay(b, v, p),
+        ClientShellOverlay::Onboarding => render_onboarding_overlay(b, p, modern),
+        ClientShellOverlay::ProductAnnouncement(v) => {
+            render_product_announcement_overlay(b, v, p, modern)
+        }
         ClientShellOverlay::ReleaseNotes(v) => {
-            render_release_notes_overlay(b, v, &s.update_install_command, p)
+            render_release_notes_overlay(b, v, &s.update_install_command, p, modern)
         }
-        ClientShellOverlay::Rename(v) => render_rename_overlay(b, v, p),
-        ClientShellOverlay::ConfirmClose(v) => render_confirm_close_overlay(b, v, p),
-        ClientShellOverlay::Help(v) => render_help_overlay(b, v, k, p),
+        ClientShellOverlay::Rename(v) => render_rename_overlay(b, v, p, modern),
+        ClientShellOverlay::ConfirmClose(v) => render_confirm_close_overlay(b, v, p, modern),
+        ClientShellOverlay::Help(v) => render_help_overlay(b, v, k, p, modern),
         ClientShellOverlay::Navigator(v) => {
-            render_navigator_overlay(b, v, endpoints, active_endpoint_id, p)
+            render_navigator_overlay(b, v, endpoints, active_endpoint_id, p, modern)
         }
-        ClientShellOverlay::Settings(v) => {
-            settings_overlay::render_settings_overlay(b, v, s.integration_updates_available, p)
-        }
+        ClientShellOverlay::Settings(v) => settings_overlay::render_settings_overlay(
+            b,
+            v,
+            s.integration_updates_available,
+            p,
+            modern,
+        ),
         ClientShellOverlay::WorktreeCreate(v) => {
-            worktree_overlays::render_worktree_create_overlay(b, v, p)
+            worktree_overlays::render_worktree_create_overlay(b, v, p, modern)
         }
         ClientShellOverlay::WorktreeOpen(v) => {
-            worktree_overlays::render_worktree_open_overlay(b, v, p)
+            worktree_overlays::render_worktree_open_overlay(b, v, p, modern)
         }
         ClientShellOverlay::WorktreeRemove(v) => {
-            worktree_overlays::render_worktree_remove_overlay(b, v, p)
+            worktree_overlays::render_worktree_remove_overlay(b, v, p, modern)
         }
         ClientShellOverlay::ContextMenu(_) | ClientShellOverlay::GlobalMenu(_) => None,
     }
@@ -89,6 +96,7 @@ pub(crate) fn render_global_menu(
     menu: &ClientGlobalMenuOverlay,
     snapshot: &ClientShellSnapshot,
     palette: &Palette,
+    modern: bool,
 ) -> Option<OverlayRender> {
     let items = super::super::global_menu::global_menu_items(snapshot);
     let screen = buffer.area;
@@ -113,7 +121,7 @@ pub(crate) fn render_global_menu(
         .min(screen.right().saturating_sub(width));
     let y = launcher.y.saturating_sub(height).max(screen.y);
     let rect = Rect::new(x, y, width, height);
-    let inner = panel(buffer, rect, palette.accent, palette.panel_bg)?;
+    let inner = panel(buffer, rect, palette.accent, palette.panel_bg, modern)?;
     let mut rows = Vec::new();
     for (index, (label, action)) in items.iter().enumerate() {
         let row_y = inner.y.saturating_add(index as u16);
@@ -166,6 +174,7 @@ pub(crate) fn render_context_menu(
     buffer: &mut Buffer,
     menu: &ClientContextMenuOverlay,
     palette: &Palette,
+    modern: bool,
 ) -> Option<OverlayRender> {
     let items = menu.items();
     let screen = buffer.area;
@@ -190,7 +199,7 @@ pub(crate) fn render_context_menu(
             .saturating_add(screen.height.saturating_sub(height)),
     );
     let rect = Rect::new(x, y, width, height);
-    let inner = panel(buffer, rect, palette.accent, palette.panel_bg)?;
+    let inner = panel(buffer, rect, palette.accent, palette.panel_bg, modern)?;
     let mut rows = Vec::new();
     for (index, item) in items.iter().enumerate() {
         let row_y = inner.y.saturating_add(index as u16);
@@ -223,9 +232,13 @@ fn panel(
     a: Rect,
     c: ratatui::style::Color,
     bg: ratatui::style::Color,
+    modern: bool,
 ) -> Option<Rect> {
     if a.width < 2 || a.height < 2 {
         return None;
+    }
+    if modern {
+        return Some(crate::ui::float_frame(b, a, None, c, bg));
     }
     let background = Style::default().bg(bg).remove_modifier(Modifier::DIM);
     let border = Style::default().fg(c).bg(bg).remove_modifier(Modifier::DIM);
@@ -274,7 +287,19 @@ fn popup(a: Rect, w: u16, h: u16) -> Option<Rect> {
         h,
     ))
 }
-fn button(b: &mut Buffer, r: Rect, t: &str, s: Style) {
+fn button(b: &mut Buffer, r: Rect, t: &str, s: Style, modern: bool) {
+    if modern && r.width >= 3 {
+        // The label's own edge spaces become the pill caps: same width, same hit rect.
+        crate::ui::pill(
+            b,
+            r,
+            t.trim(),
+            s.bg.unwrap_or(ratatui::style::Color::Reset),
+            s.fg.unwrap_or(ratatui::style::Color::Reset),
+            s.add_modifier.contains(Modifier::BOLD),
+        );
+        return;
+    }
     b.set_style(r, s);
     let w = display_width(t).min(r.width);
     put_text(b, r.x + (r.width - w) / 2, r.y, w, t, s)
@@ -295,24 +320,19 @@ fn row(i: Rect, ws: &[u16], gap: u16, off: u16) -> Vec<Rect> {
         })
         .collect()
 }
-fn contrast(p: &Palette) -> ratatui::style::Color {
-    match p.panel_bg {
-        ratatui::style::Color::Reset => p.surface_dim,
-        c => c,
-    }
-}
 fn render_release_notes_overlay(
     b: &mut Buffer,
     notes: &crate::app::state::ReleaseNotesState,
     install_command: &str,
     p: &Palette,
+    modern: bool,
 ) -> Option<OverlayRender> {
     let outer = popup(
         b.area,
         crate::ui::RELEASE_NOTES_MODAL_SIZE.0,
         crate::ui::RELEASE_NOTES_MODAL_SIZE.1,
     )?;
-    let inner = panel(b, outer, p.accent, p.panel_bg)?;
+    let inner = panel(b, outer, p.accent, p.panel_bg, modern)?;
     if inner.height < 8 || inner.width < 20 {
         return Some(OverlayRender {
             area: outer,
@@ -367,10 +387,11 @@ fn render_release_notes_overlay(
         close,
         " esc close ",
         Style::default()
-            .fg(contrast(p))
+            .fg(panel_contrast_fg(p))
             .bg(p.accent)
             .add_modifier(Modifier::BOLD)
             .remove_modifier(Modifier::DIM),
+        modern,
     );
 
     let body = stack.content;
@@ -421,13 +442,14 @@ fn render_product_announcement_overlay(
     b: &mut Buffer,
     announcement: &crate::app::state::ProductAnnouncementState,
     p: &Palette,
+    modern: bool,
 ) -> Option<OverlayRender> {
     let outer = popup(
         b.area,
         crate::ui::PRODUCT_ANNOUNCEMENT_MODAL_SIZE.0,
         crate::ui::PRODUCT_ANNOUNCEMENT_MODAL_SIZE.1,
     )?;
-    let inner = panel(b, outer, p.accent, p.panel_bg)?;
+    let inner = panel(b, outer, p.accent, p.panel_bg, modern)?;
     if inner.height < 8 || inner.width < 20 {
         return Some(OverlayRender {
             area: outer,
@@ -483,10 +505,11 @@ fn render_product_announcement_overlay(
         close,
         " esc close ",
         Style::default()
-            .fg(contrast(p))
+            .fg(panel_contrast_fg(p))
             .bg(p.accent)
             .add_modifier(Modifier::BOLD)
             .remove_modifier(Modifier::DIM),
+        modern,
     );
 
     let body = stack.content;
@@ -533,9 +556,9 @@ fn render_product_announcement_overlay(
     })
 }
 
-fn render_onboarding_overlay(b: &mut Buffer, p: &Palette) -> Option<OverlayRender> {
+fn render_onboarding_overlay(b: &mut Buffer, p: &Palette, modern: bool) -> Option<OverlayRender> {
     let outer = popup(b.area, 64, 16)?;
-    let inner = panel(b, outer, p.accent, p.panel_bg)?;
+    let inner = panel(b, outer, p.accent, p.panel_bg, modern)?;
     if inner.height < 11 {
         return Some(OverlayRender {
             area: outer,
@@ -615,10 +638,11 @@ fn render_onboarding_overlay(b: &mut Buffer, p: &Palette) -> Option<OverlayRende
         primary,
         " ↵ continue ",
         Style::default()
-            .fg(contrast(p))
+            .fg(panel_contrast_fg(p))
             .bg(p.accent)
             .add_modifier(Modifier::BOLD)
             .remove_modifier(Modifier::DIM),
+        modern,
     );
     Some(OverlayRender {
         area: outer,
@@ -631,9 +655,10 @@ fn render_rename_overlay(
     b: &mut Buffer,
     v: &ClientRenameOverlay,
     p: &Palette,
+    modern: bool,
 ) -> Option<OverlayRender> {
     let q = popup(b.area, 56, 7)?;
-    let i = panel(b, q, p.accent, p.panel_bg)?;
+    let i = panel(b, q, p.accent, p.panel_bg, modern)?;
     put_text(
         b,
         i.x,
@@ -662,16 +687,17 @@ fn render_rename_overlay(
         *save,
         " ↵ save ",
         Style::default()
-            .fg(contrast(p))
+            .fg(panel_contrast_fg(p))
             .bg(p.accent)
             .add_modifier(Modifier::BOLD),
+        modern,
     );
     let n = Style::default()
         .fg(p.text)
         .bg(p.surface0)
         .add_modifier(Modifier::BOLD);
-    button(b, *clear, " ^c clear ", n);
-    button(b, *cancel, " esc cancel ", n);
+    button(b, *clear, " ^c clear ", n, modern);
+    button(b, *cancel, " esc cancel ", n, modern);
     Some(OverlayRender {
         area: q,
         primary: *save,
@@ -693,6 +719,7 @@ fn render_navigator_overlay(
     endpoints: &[ClientShellEndpoint],
     active_endpoint_id: &ClientEndpointId,
     p: &Palette,
+    modern: bool,
 ) -> Option<OverlayRender> {
     let a = b.area;
     let width = a.width.saturating_sub(4).min(116);
@@ -707,7 +734,7 @@ fn render_navigator_overlay(
         height,
     )
     .intersection(a);
-    let i = panel(b, q, p.accent, p.panel_bg)?;
+    let i = panel(b, q, p.accent, p.panel_bg, modern)?;
     put_text(
         b,
         q.x + 2,
@@ -832,7 +859,7 @@ fn render_navigator_overlay(
                 .add_modifier(Modifier::DIM)
         } else if ix == selected {
             Style::default()
-                .fg(contrast(p))
+                .fg(panel_contrast_fg(p))
                 .bg(p.accent)
                 .add_modifier(Modifier::BOLD)
         } else {
@@ -1105,11 +1132,12 @@ fn render_help_overlay(
     h: &ClientHelpOverlay,
     k: &LiveKeybindConfig,
     p: &Palette,
+    modern: bool,
 ) -> Option<OverlayRender> {
     use ratatui::widgets::{Paragraph, Widget, Wrap};
 
     let q = popup(b.area, 76, 22)?;
-    let i = panel(b, q, p.accent, p.panel_bg)?;
+    let i = panel(b, q, p.accent, p.panel_bg, modern)?;
     if i.width < 20 || i.height < 6 {
         return None;
     }
@@ -1134,9 +1162,10 @@ fn render_help_overlay(
             " esc close "
         },
         Style::default()
-            .fg(contrast(p))
+            .fg(panel_contrast_fg(p))
             .bg(p.accent)
             .add_modifier(Modifier::BOLD),
+        modern,
     );
     let sy = i.y + 1;
     put_text(
@@ -1243,9 +1272,10 @@ fn render_confirm_close_overlay(
     b: &mut Buffer,
     c: &ClientConfirmCloseOverlay,
     p: &Palette,
+    modern: bool,
 ) -> Option<OverlayRender> {
     let q = popup(b.area, 64, 6)?;
-    let i = panel(b, q, p.red, p.panel_bg)?;
+    let i = panel(b, q, p.red, p.panel_bg, modern)?;
     put_text(
         b,
         i.x,
@@ -1274,9 +1304,10 @@ fn render_confirm_close_overlay(
         *ok,
         " ↵ confirm ",
         Style::default()
-            .fg(contrast(p))
+            .fg(panel_contrast_fg(p))
             .bg(p.red)
             .add_modifier(Modifier::BOLD),
+        modern,
     );
     button(
         b,
@@ -1286,6 +1317,7 @@ fn render_confirm_close_overlay(
             .fg(p.text)
             .bg(p.surface0)
             .add_modifier(Modifier::BOLD),
+        modern,
     );
     Some(OverlayRender {
         area: q,

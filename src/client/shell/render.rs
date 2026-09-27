@@ -37,6 +37,7 @@ pub(super) fn render_mode_bar(
     update_available: bool,
     keybinds: &LiveKeybindConfig,
     palette: &Palette,
+    chrome: crate::config::ChromeStyle,
 ) -> Option<Rect> {
     if (mode == ClientShellMode::Terminal && endpoint_error.is_none()) || pane_area.is_empty() {
         return None;
@@ -197,8 +198,25 @@ pub(super) fn render_mode_bar(
         }
     }
 
+    if chrome == crate::config::ChromeStyle::Modern {
+        segments =
+            modern_mode_segments(segments, mode, endpoint_error.is_some(), key, base, palette);
+    }
     let mut x = bar.x;
     let end = bar.x + bar.width;
+    if chrome == crate::config::ChromeStyle::Modern && !segments.is_empty() {
+        let (label, style) = segments.remove(0);
+        let width = display_width(&label).saturating_add(2).min(bar.width);
+        crate::ui::pill(
+            buffer,
+            Rect::new(x, bar.y, width, 1),
+            &label,
+            style.bg.unwrap_or(palette.accent),
+            style.fg.unwrap_or(palette.text),
+            true,
+        );
+        x = x.saturating_add(width).saturating_add(1);
+    }
     for (text, style) in segments {
         if x >= end {
             break;
@@ -229,6 +247,65 @@ pub(super) fn render_mode_bar(
     Some(bar)
 }
 
+/// Modern mode bar: the label keeps its own slot (drawn as a pill by the
+/// caller) in the mode's colour, keys go subtext0 bold, descriptions overlay1,
+/// and the old double-space gaps between hints become ` · `.
+fn modern_mode_segments(
+    segments: Vec<(String, Style)>,
+    mode: ClientShellMode,
+    error: bool,
+    key: Style,
+    base: Style,
+    palette: &Palette,
+) -> Vec<(String, Style)> {
+    let fill = if error {
+        palette.red
+    } else {
+        match mode {
+            ClientShellMode::Navigate => palette.teal,
+            ClientShellMode::Resize => palette.mauve,
+            _ => palette.accent,
+        }
+    };
+    let key_style = Style::default()
+        .fg(palette.subtext0)
+        .bg(palette.panel_bg)
+        .add_modifier(Modifier::BOLD);
+    let desc = Style::default().fg(palette.overlay1).bg(palette.panel_bg);
+    let dot = Style::default().fg(palette.overlay0).bg(palette.panel_bg);
+    let mut out = Vec::with_capacity(segments.len() + 8);
+    for (index, (text, style)) in segments.into_iter().enumerate() {
+        if index == 0 {
+            out.push((
+                format!(" {} ", text.trim()),
+                Style::default()
+                    .fg(panel_contrast_fg(palette))
+                    .bg(fill)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else if style == key {
+            out.push((text, key_style));
+        } else if style == base {
+            let trimmed = text.trim_end();
+            let gap = text.len() - trimmed.len() >= 2;
+            let trimmed = if out.len() == 1 {
+                trimmed.trim_start()
+            } else {
+                trimmed
+            };
+            if !trimmed.is_empty() {
+                out.push((trimmed.to_owned(), desc));
+            }
+            if gap {
+                out.push((" · ".to_owned(), dot));
+            }
+        } else {
+            out.push((text, style));
+        }
+    }
+    out
+}
+
 pub(super) struct ShellRenderState<'a> {
     pub(super) machine_diagnostics: &'a super::machine_diagnostics::MachineDiagnostics,
     pub(super) endpoints: &'a [ClientShellEndpoint],
@@ -248,6 +325,8 @@ pub(super) struct ShellRenderState<'a> {
     pub(super) reveal_navigation_workspace: &'a mut bool,
     pub(super) dragged_workspace_id: Option<&'a str>,
     pub(super) workspace_drop_indicator_row: Option<u16>,
+    /// Working-spinner frame (0 = static glyph).
+    pub(super) spin: u8,
 }
 
 pub(super) fn render_shell(
@@ -318,6 +397,7 @@ pub(super) fn render_shell(
             state.tab_scroll,
             state.reveal_focused_tab,
             state.tab_drag_insert_index,
+            state.spin,
             &mut hits,
         );
     }
@@ -370,6 +450,60 @@ pub(super) fn put_text(buffer: &mut Buffer, x: u16, y: u16, width: u16, text: &s
         return;
     }
     buffer.set_stringn(x, y, text, width as usize, style);
+}
+
+/// `╶────╴`: a divider inset one cell from each edge of `width`.
+pub(super) fn put_inset_rule(buffer: &mut Buffer, x: u16, y: u16, width: u16, style: Style) {
+    if width < 4 {
+        put_text(buffer, x, y, width, &"─".repeat(usize::from(width)), style);
+        return;
+    }
+    let rule = format!("╶{}╴", "─".repeat(usize::from(width - 4)));
+    put_text(buffer, x + 1, y, width - 2, &rule, style);
+}
+
+/// `▎` in column 0 of every row of `rect` (the cell keeps its background).
+pub(super) fn put_row_bar(buffer: &mut Buffer, rect: Rect, color: ratatui::style::Color) {
+    for y in rect.y..rect.bottom() {
+        if let Some(cell) = buffer.cell_mut((rect.x, y)) {
+            cell.set_symbol("▎").set_fg(color);
+        }
+    }
+}
+
+/// Modern sidebar bar colour: accent on the current row, the status colour
+/// while an agent is working, blocked or done, nothing when idle.
+pub(super) fn row_bar_color(
+    current: bool,
+    status: crate::api::schema::AgentStatus,
+    palette: &Palette,
+) -> Option<ratatui::style::Color> {
+    use crate::api::schema::AgentStatus;
+    if current {
+        return Some(palette.accent);
+    }
+    matches!(
+        status,
+        AgentStatus::Working | AgentStatus::Blocked | AgentStatus::Done
+    )
+    .then(|| status_color(status, palette))
+}
+
+/// Modern selected-row fill: the sidebar background (or surface0 when the
+/// sidebar is transparent) tinted toward the accent.
+/// Without RGB colours there is nothing to tint, so this falls back to the
+/// classic selection background to keep the cursor visible.
+pub(super) fn selected_row_fill(palette: &Palette) -> ratatui::style::Color {
+    use ratatui::style::Color;
+    let base = match palette.sidebar_bg {
+        Color::Reset => palette.surface0,
+        color => color,
+    };
+    match (base, palette.accent) {
+        (Color::Rgb(..), Color::Rgb(..)) => crate::ui::tint(base, palette.accent, 0.18),
+        _ if palette.selection_bg == Color::Reset => palette.active_row_bg,
+        _ => palette.selection_bg,
+    }
 }
 
 pub(super) fn display_width(text: &str) -> u16 {

@@ -25,6 +25,8 @@ pub(crate) struct ClientShellConfig {
     pub(super) agents: crate::config::AgentsSidebarConfig,
     pub(super) agent_panel_sort: crate::config::AgentPanelSortConfig,
     pub(super) status_indicators: crate::config::StatusIndicatorStyle,
+    pub(super) chrome: crate::config::ChromeStyle,
+    pub(super) animations: bool,
     pub(super) sound_enabled: bool,
     pub(super) toast_delivery: crate::config::ToastDelivery,
     pub(super) toast_delay_seconds: u64,
@@ -83,6 +85,8 @@ pub(super) enum ClientMobileTarget {
 
 #[derive(Default)]
 pub(super) struct ShellHitMap {
+    /// Outer rect of the open overlay or menu (motion clips its fade here).
+    pub(super) overlay_area: Rect,
     pub(super) machines: Vec<MachineHit>,
     pub(super) workspaces: Vec<WorkspaceHit>,
     pub(super) workspace_body: Rect,
@@ -1395,7 +1399,8 @@ impl ClientShellState {
                             || left.label != right.label
                             || left.zoomed != right.zoomed
                     })
-                || render::tab_bar_status_width(current) != render::tab_bar_status_width(&snapshot)
+                || render::tab_bar_status_width(current, &self.config)
+                    != render::tab_bar_status_width(&snapshot, &self.config)
         });
         if self
             .snapshot

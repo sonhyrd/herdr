@@ -335,6 +335,14 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # distinct static glyphs for blocked, working, done, idle, and unknown states.
 # status_indicators = "dots"
 
+# Chrome style: "modern" draws pill tabs, rounded popups and toasts, and
+# status-coloured sidebar bars; "classic" keeps the square look.
+# chrome = "modern"
+
+# Animate toasts, popups, tab switches and the working spinner.
+# HERDR_REDUCE_MOTION=1 also turns animation off.
+# animations = true
+
 # Accent color for highlights, borders, and navigation UI.
 # Accepts: hex (#89b4fa), named colors (cyan, blue, magenta), or rgb(r,g,b)
 # accent = "cyan"

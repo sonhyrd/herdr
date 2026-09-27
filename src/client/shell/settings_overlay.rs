@@ -3,7 +3,7 @@ use super::*;
 fn choice_style(selected: bool, palette: &Palette) -> Style {
     if selected {
         Style::default()
-            .fg(contrast(palette))
+            .fg(panel_contrast_fg(palette))
             .bg(palette.accent)
             .add_modifier(Modifier::BOLD)
     } else {
@@ -38,6 +38,7 @@ pub(super) fn render_settings_overlay(
     settings: &ClientSettingsOverlay,
     integration_updates_available: bool,
     palette: &Palette,
+    modern: bool,
 ) -> Option<OverlayRender> {
     let integration_height = 14u16
         .saturating_add(settings.integrations.len().max(1) as u16)
@@ -48,7 +49,7 @@ pub(super) fn render_settings_overlay(
         22
     };
     let popup = popup(buffer.area, 76, height)?;
-    let inner = panel(buffer, popup, palette.accent, palette.panel_bg)?;
+    let inner = panel(buffer, popup, palette.accent, palette.panel_bg, modern)?;
     if inner.width < 20 || inner.height < 8 {
         return None;
     }
@@ -84,7 +85,7 @@ pub(super) fn render_settings_overlay(
         let active = *section == settings.section;
         let style = if active {
             Style::default()
-                .fg(contrast(palette))
+                .fg(panel_contrast_fg(palette))
                 .bg(palette.accent)
                 .add_modifier(Modifier::BOLD)
         } else {
@@ -217,9 +218,10 @@ pub(super) fn render_settings_overlay(
                 " ↵ apply "
             },
             Style::default()
-                .fg(contrast(palette))
+                .fg(panel_contrast_fg(palette))
                 .bg(palette.accent)
                 .add_modifier(Modifier::BOLD),
+            modern,
         );
         (primary, buttons[1])
     } else {
@@ -233,6 +235,7 @@ pub(super) fn render_settings_overlay(
             .fg(palette.text)
             .bg(palette.surface0)
             .add_modifier(Modifier::BOLD),
+        modern,
     );
     put_text(
         buffer,

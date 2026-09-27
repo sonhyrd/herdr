@@ -4,9 +4,10 @@ pub(super) fn render_worktree_create_overlay(
     b: &mut Buffer,
     create: &ClientWorktreeCreateOverlay,
     p: &Palette,
+    modern: bool,
 ) -> Option<OverlayRender> {
     let popup = popup(b.area, 68, 12)?;
-    let inner = panel(b, popup, p.accent, p.panel_bg)?;
+    let inner = panel(b, popup, p.accent, p.panel_bg, modern)?;
     put_text(
         b,
         inner.x,
@@ -78,9 +79,10 @@ pub(super) fn render_worktree_create_overlay(
         *primary,
         " ↵ create and open ",
         Style::default()
-            .fg(contrast(p))
+            .fg(panel_contrast_fg(p))
             .bg(p.accent)
             .add_modifier(Modifier::BOLD),
+        modern,
     );
     button(
         b,
@@ -90,6 +92,7 @@ pub(super) fn render_worktree_create_overlay(
             .fg(p.text)
             .bg(p.surface0)
             .add_modifier(Modifier::BOLD),
+        modern,
     );
     Some(OverlayRender {
         area: popup,
@@ -110,10 +113,11 @@ pub(super) fn render_worktree_open_overlay(
     b: &mut Buffer,
     open: &ClientWorktreeOpenOverlay,
     p: &Palette,
+    modern: bool,
 ) -> Option<OverlayRender> {
     let popup_height = (open.entries.len().saturating_mul(2) + 7).clamp(12, 26) as u16;
     let popup = popup(b.area, 96, popup_height)?;
-    let inner = panel(b, popup, p.accent, p.panel_bg)?;
+    let inner = panel(b, popup, p.accent, p.panel_bg, modern)?;
     put_text(
         b,
         inner.x,
@@ -209,7 +213,7 @@ pub(super) fn render_worktree_open_overlay(
         row_hits.push((rect, entry_index));
         let selected = entry_index == open.selected;
         let style = if selected {
-            Style::default().fg(contrast(p)).bg(p.accent)
+            Style::default().fg(panel_contrast_fg(p)).bg(p.accent)
         } else {
             Style::default().fg(p.text).bg(p.panel_bg)
         };
@@ -277,9 +281,10 @@ pub(super) fn render_worktree_open_overlay(
         *primary,
         " ↵ open ",
         Style::default()
-            .fg(contrast(p))
+            .fg(panel_contrast_fg(p))
             .bg(p.accent)
             .add_modifier(Modifier::BOLD),
+        modern,
     );
     button(
         b,
@@ -289,6 +294,7 @@ pub(super) fn render_worktree_open_overlay(
             .fg(p.text)
             .bg(p.surface0)
             .add_modifier(Modifier::BOLD),
+        modern,
     );
     Some(OverlayRender {
         area: popup,
@@ -309,9 +315,10 @@ pub(super) fn render_worktree_remove_overlay(
     b: &mut Buffer,
     remove: &ClientWorktreeRemoveOverlay,
     p: &Palette,
+    modern: bool,
 ) -> Option<OverlayRender> {
     let popup = popup(b.area, 72, 10)?;
-    let inner = panel(b, popup, p.red, p.panel_bg)?;
+    let inner = panel(b, popup, p.red, p.panel_bg, modern)?;
     put_text(
         b,
         inner.x,
@@ -389,9 +396,10 @@ pub(super) fn render_worktree_remove_overlay(
             " ↵ remove "
         },
         Style::default()
-            .fg(contrast(p))
+            .fg(panel_contrast_fg(p))
             .bg(p.red)
             .add_modifier(Modifier::BOLD),
+        modern,
     );
     button(
         b,
@@ -401,6 +409,7 @@ pub(super) fn render_worktree_remove_overlay(
             .fg(p.text)
             .bg(p.surface0)
             .add_modifier(Modifier::BOLD),
+        modern,
     );
     Some(OverlayRender {
         area: popup,

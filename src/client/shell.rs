@@ -66,6 +66,7 @@ use crate::protocol::{
 };
 #[cfg(test)]
 use crate::raw_input::RawInputEvent;
+use crate::ui::panel_contrast_fg;
 
 fn target_event_message(target: ClientInputTarget, event: ClientPaneInputEvent) -> ClientMessage {
     match target {
@@ -196,6 +197,25 @@ fn status_icon(
     }
 }
 
+/// `status_icon` for a frame of the Working spinner. `spin = 0` (and motion
+/// off) keeps the static glyph; modern chrome swaps in bolder symbols.
+fn status_icon_frame(
+    status: crate::api::schema::AgentStatus,
+    style: crate::config::StatusIndicatorStyle,
+    chrome: crate::config::ChromeStyle,
+    spin: u8,
+) -> &'static str {
+    use crate::api::schema::AgentStatus;
+    use crate::config::{ChromeStyle, StatusIndicatorStyle};
+    match (chrome, style, status) {
+        (ChromeStyle::Modern, StatusIndicatorStyle::Symbols, AgentStatus::Working) if spin > 0 => {
+            crate::ui::SPINNER[usize::from(spin) % crate::ui::SPINNER.len()]
+        }
+        (ChromeStyle::Modern, StatusIndicatorStyle::Symbols, AgentStatus::Blocked) => "✕",
+        _ => status_icon(status, style),
+    }
+}
+
 fn status_dot(status: crate::api::schema::AgentStatus) -> &'static str {
     status_icon(status, crate::config::StatusIndicatorStyle::Dots)
 }
@@ -233,13 +253,6 @@ fn status_color(
         AgentStatus::Done => palette.teal,
         AgentStatus::Idle => palette.green,
         AgentStatus::Unknown => palette.overlay0,
-    }
-}
-
-fn panel_contrast_fg(palette: &Palette) -> ratatui::style::Color {
-    match palette.panel_bg {
-        ratatui::style::Color::Reset => palette.surface_dim,
-        color => color,
     }
 }
 

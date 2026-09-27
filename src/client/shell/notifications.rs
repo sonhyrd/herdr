@@ -113,9 +113,16 @@ pub(super) fn render_notification_card(
     top_offset: u16,
     dot_color: Color,
     palette: &Palette,
+    chrome: crate::config::ChromeStyle,
+    countdown: Option<f32>,
 ) -> Rect {
     if area.is_empty() {
         return Rect::default();
+    }
+    if chrome == crate::config::ChromeStyle::Modern {
+        return render_modern_notification_card(
+            buffer, area, title, body, position, top_offset, dot_color, palette, countdown,
+        );
     }
     let content_width = unicode_width::UnicodeWidthStr::width(title)
         .max(unicode_width::UnicodeWidthStr::width(body))
@@ -124,23 +131,7 @@ pub(super) fn render_notification_card(
         .unwrap_or(u16::MAX)
         .min(area.width);
     let height: u16 = if body.is_empty() { 3 } else { 4 }.min(area.height);
-    let x = match position {
-        crate::config::ToastHerdrPosition::TopLeft
-        | crate::config::ToastHerdrPosition::BottomLeft => area.x,
-        crate::config::ToastHerdrPosition::TopRight
-        | crate::config::ToastHerdrPosition::BottomRight => area.right().saturating_sub(width),
-    };
-    let max_y = area.bottom().saturating_sub(height).max(area.y);
-    let y = match position {
-        crate::config::ToastHerdrPosition::TopLeft
-        | crate::config::ToastHerdrPosition::TopRight => area.y.saturating_add(top_offset),
-        crate::config::ToastHerdrPosition::BottomLeft
-        | crate::config::ToastHerdrPosition::BottomRight => area
-            .bottom()
-            .saturating_sub(height.saturating_add(top_offset)),
-    }
-    .clamp(area.y, max_y);
-    let rect = Rect::new(x, y, width, height);
+    let rect = toast_rect(area, width, height, position, top_offset);
     Clear.render(rect, buffer);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -177,6 +168,101 @@ pub(super) fn render_notification_card(
     rect
 }
 
+fn toast_rect(
+    area: Rect,
+    width: u16,
+    height: u16,
+    position: crate::config::ToastHerdrPosition,
+    top_offset: u16,
+) -> Rect {
+    let x = match position {
+        crate::config::ToastHerdrPosition::TopLeft
+        | crate::config::ToastHerdrPosition::BottomLeft => area.x,
+        crate::config::ToastHerdrPosition::TopRight
+        | crate::config::ToastHerdrPosition::BottomRight => area.right().saturating_sub(width),
+    };
+    let max_y = area.bottom().saturating_sub(height).max(area.y);
+    let y = match position {
+        crate::config::ToastHerdrPosition::TopLeft
+        | crate::config::ToastHerdrPosition::TopRight => area.y.saturating_add(top_offset),
+        crate::config::ToastHerdrPosition::BottomLeft
+        | crate::config::ToastHerdrPosition::BottomRight => area
+            .bottom()
+            .saturating_sub(height.saturating_add(top_offset)),
+    }
+    .clamp(area.y, max_y);
+    Rect::new(x, y, width, height)
+}
+
+/// Modern toast: a rounded card bordered in the kind colour with
+/// ` ● title ` on the top edge, the body inside in subtext0, and a `━` run on
+/// the bottom edge that shrinks as the toast's lifetime runs out.
+fn render_modern_notification_card(
+    buffer: &mut Buffer,
+    area: Rect,
+    title: &str,
+    body: &str,
+    position: crate::config::ToastHerdrPosition,
+    top_offset: u16,
+    color: Color,
+    palette: &Palette,
+    countdown: Option<f32>,
+) -> Rect {
+    let title_width = unicode_width::UnicodeWidthStr::width(title).saturating_add(8);
+    let body_width = unicode_width::UnicodeWidthStr::width(body).saturating_add(4);
+    let width = u16::try_from(title_width.max(body_width))
+        .unwrap_or(u16::MAX)
+        .min(area.width);
+    let height: u16 = if body.is_empty() { 2 } else { 3 }.min(area.height);
+    let rect = toast_rect(area, width, height, position, top_offset);
+    if rect.width < 2 || rect.height < 2 {
+        Clear.render(rect, buffer);
+        buffer.set_style(rect, Style::default().bg(palette.panel_bg));
+        return rect;
+    }
+    let inner = crate::ui::float_frame(buffer, rect, None, color, palette.panel_bg);
+    let bg = Style::default().bg(palette.panel_bg);
+    let mut x = rect.x.saturating_add(2);
+    for (text, style) in [
+        (" ", bg),
+        ("●", bg.fg(color)),
+        (" ", bg),
+        (title, bg.fg(palette.text).add_modifier(Modifier::BOLD)),
+        (" ", bg),
+    ] {
+        x = super::render::put_segment(
+            buffer,
+            x,
+            rect.y,
+            rect.right().saturating_sub(2),
+            text,
+            style,
+        );
+    }
+    if !body.is_empty() && inner.height > 0 {
+        super::render::put_text(
+            buffer,
+            inner.x.saturating_add(1),
+            inner.y,
+            inner.width.saturating_sub(2),
+            body,
+            bg.fg(palette.subtext0),
+        );
+    }
+    if let Some(fraction) = countdown {
+        let run = (f32::from(inner.width) * fraction.clamp(0.0, 1.0)).ceil() as u16;
+        super::render::put_text(
+            buffer,
+            inner.x,
+            rect.bottom() - 1,
+            run.min(inner.width),
+            &"━".repeat(usize::from(run.min(inner.width))),
+            bg.fg(color),
+        );
+    }
+    rect
+}
+
 pub(super) fn render_visible_notification(
     buffer: &mut Buffer,
     area: Rect,
@@ -184,8 +270,16 @@ pub(super) fn render_visible_notification(
     default_position: crate::config::ToastHerdrPosition,
     top_offset: u16,
     palette: &Palette,
+    chrome: crate::config::ChromeStyle,
+    now: std::time::Instant,
 ) -> Rect {
     let event = &notification.event;
+    let lifetime = super::notification_policy::notification_duration(event.kind);
+    let countdown = notification
+        .deadline
+        .saturating_duration_since(now)
+        .as_secs_f32()
+        / lifetime.as_secs_f32().max(f32::EPSILON);
     let dot_color = match event.kind {
         SemanticNotificationKind::NeedsAttention => palette.red,
         SemanticNotificationKind::Finished => palette.blue,
@@ -202,6 +296,8 @@ pub(super) fn render_visible_notification(
         top_offset,
         dot_color,
         palette,
+        chrome,
+        Some(countdown),
     )
 }
 
@@ -470,6 +566,8 @@ mod tests {
                     position,
                     1,
                     &palette,
+                    crate::config::ChromeStyle::Modern,
+                    std::time::Instant::now(),
                 );
                 assert!(rect.y >= area.y);
                 assert!(rect.bottom() <= area.bottom());
