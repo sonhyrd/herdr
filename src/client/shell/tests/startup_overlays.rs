@@ -764,8 +764,15 @@ fn update_ready_menu_opens_client_owned_release_notes_and_dismisses_by_version()
     let title_cell = &notes_buffer[(stack.header.x + 1, stack.header.y)];
     assert_eq!(title_cell.fg, state.config.palette.text);
     assert!(title_cell.modifier.contains(Modifier::BOLD));
+    // Modern buttons are pills: a `▐` cap in the fill colour, then the filled label.
+    let primary = state.hits.overlay_primary;
+    assert_eq!(notes_buffer[(primary.x, primary.y)].symbol(), "▐");
     assert_eq!(
-        notes_buffer[(state.hits.overlay_primary.x, state.hits.overlay_primary.y)].bg,
+        notes_buffer[(primary.x, primary.y)].fg,
+        state.config.palette.accent
+    );
+    assert_eq!(
+        notes_buffer[(primary.x + 1, primary.y)].bg,
         state.config.palette.accent
     );
 

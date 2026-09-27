@@ -234,7 +234,7 @@ fn client_owned_sidebar_dividers_resize_live() {
         .map(|cell| cell.symbol.as_str())
         .collect();
     assert!(
-        waiting_text.contains(" spaces"),
+        waiting_text.contains(" ◆ SPACES"),
         "local sidebar must keep spaces while resizing: {waiting_text}"
     );
     assert!(!waiting_text.contains(" machines"));
@@ -273,7 +273,7 @@ fn client_owned_sidebar_dividers_resize_live() {
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect();
-    assert!(recovered_text.contains(" spaces"));
+    assert!(recovered_text.contains(" ◆ SPACES"));
     assert!(recovered_text.contains("LIVE"));
     assert!(!state.hits.panes.is_empty());
     let section_divider = state.hits.sidebar_section_divider;
@@ -587,5 +587,46 @@ fn tab_bar_shows_position_glyph_and_capped_custom_label() {
     let capped = tab("tab_4");
     assert!(capped.width <= 24, "long tab is {} wide", capped.width);
     let text = tab_bar_row(&frame, capped);
-    assert!(text.contains("3 × aaa") && text.contains('…'), "{text:?}");
+    assert!(text.contains("3 ✕ aaa") && text.contains('…'), "{text:?}");
+}
+
+#[test]
+fn modern_sidebar_marks_spaces_with_a_status_bar_in_column_zero() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut snapshot = snapshot();
+    let mut working = snapshot.workspaces[0].clone();
+    working.workspace_id = "ws_2".into();
+    working.label = "builder".into();
+    working.focused = false;
+    working.agent_status = AgentStatus::Working;
+    let mut idle = working.clone();
+    idle.workspace_id = "ws_3".into();
+    idle.label = "docs".into();
+    idle.agent_status = AgentStatus::Idle;
+    snapshot.workspaces.extend([working, idle]);
+    state.set_snapshot(Box::new(snapshot));
+    state.set_pane_surface(surface());
+
+    let frame = state.compose(106, 30).expect("frame");
+    let buffer = frame.to_ratatui_buffer().expect("buffer");
+    let row = |id: &str| {
+        state
+            .hits
+            .workspaces
+            .iter()
+            .find(|hit| hit.workspace_id == id)
+            .expect("workspace row")
+            .rect
+    };
+    let palette = &state.config.palette;
+    let focused = row("ws_1");
+    assert_eq!(buffer[(focused.x, focused.y)].symbol(), "▎");
+    assert_eq!(buffer[(focused.x, focused.y)].fg, palette.accent);
+    let working = row("ws_2");
+    assert_eq!(buffer[(working.x, working.y)].symbol(), "▎");
+    assert_eq!(buffer[(working.x, working.y)].fg, palette.yellow);
+    let idle = row("ws_3");
+    assert_eq!(buffer[(idle.x, idle.y)].symbol(), " ");
+    let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
+    assert!(text.contains(" ◆ SPACES"), "{text}");
 }
