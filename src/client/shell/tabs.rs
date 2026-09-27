@@ -1,6 +1,7 @@
 use super::*;
 
 const TAB_SCROLL_BUTTON_WIDTH: u16 = 3;
+const MAX_TAB_WIDTH: u16 = 24;
 const MIN_TAB_STRIP_WIDTH: u16 =
     MIN_TAB_WIDTH + NEW_TAB_WIDTH + TAB_SCROLL_BUTTON_WIDTH.saturating_mul(2);
 
@@ -23,9 +24,12 @@ pub(crate) fn render_tab_bar(
         .collect::<Vec<_>>();
     let desired_widths = tabs
         .iter()
-        .map(|tab| {
-            let label = tab_label(tab);
-            display_width(&label).saturating_add(4).max(MIN_TAB_WIDTH)
+        .enumerate()
+        .map(|(index, tab)| {
+            let (prefix, glyph, label) = tab_parts(tab, index + 1, config.status_indicators);
+            display_width(&format!("{prefix}{glyph}{label}"))
+                .saturating_add(4)
+                .clamp(MIN_TAB_WIDTH, MAX_TAB_WIDTH)
         })
         .collect::<Vec<_>>();
     let content = tab_bar_content_area(snapshot, area);
@@ -92,7 +96,7 @@ pub(crate) fn render_tab_bar(
     let mut first_visible = None;
     let mut last_visible = None;
     for (index, tab) in tabs.iter().enumerate().skip(*tab_scroll) {
-        let name = tab_label(tab);
+        let (prefix, glyph, label) = tab_parts(tab, index + 1, config.status_indicators);
         let desired = desired_widths[index];
         let remaining = tab_right.saturating_sub(x);
         let width = desired.min(remaining);
@@ -114,15 +118,25 @@ pub(crate) fn render_tab_bar(
         } else {
             Style::default().fg(palette.overlay0).bg(palette.surface0)
         };
-        let padding = width.saturating_sub(display_width(&name));
-        let left = padding / 2;
-        let text = format!(
-            "{empty:left$}{name}{empty:right_padding$}",
-            empty = "",
-            left = left as usize,
-            right_padding = padding.saturating_sub(left) as usize,
-        );
-        put_text(buffer, rect.x, rect.y, rect.width, &text, style);
+        buffer.set_style(rect, style);
+        let text_width = display_width(&format!("{prefix}{glyph}{label}"));
+        let mut cursor = rect.x + width.saturating_sub(text_width) / 2;
+        let glyph_style = style.fg(status_color(tab.agent_status, palette));
+        for (part, part_style) in [
+            (prefix.as_str(), style),
+            (glyph, glyph_style),
+            (label.as_str(), style),
+        ] {
+            put_text(
+                buffer,
+                cursor,
+                rect.y,
+                rect.right().saturating_sub(cursor),
+                part,
+                part_style,
+            );
+            cursor = cursor.saturating_add(display_width(part));
+        }
         hits.tabs.push((rect, tab.tab_id.clone()));
         first_visible.get_or_insert(index);
         last_visible = Some(index);
@@ -371,12 +385,28 @@ fn max_tab_scroll(widths: &[u16], available: u16) -> usize {
     start
 }
 
-fn tab_label(tab: &ClientShellTab) -> String {
-    if tab.zoomed {
-        format!("{} Z", tab.label)
+/// `1 ◐ api-server`: position (what switch-tab and the auto label use, not the
+/// stable public `number`), status glyph, then the custom label, cut so the tab
+/// fits `MAX_TAB_WIDTH`. A label equal to the position (the auto name) is skipped.
+fn tab_parts(
+    tab: &ClientShellTab,
+    position: usize,
+    style: crate::config::StatusIndicatorStyle,
+) -> (String, &'static str, String) {
+    let prefix = format!("{position} ");
+    let glyph = status_icon(tab.agent_status, style);
+    let mut label = if tab.custom_label || tab.label != position.to_string() {
+        format!(" {}", tab.label)
     } else {
-        tab.label.clone()
+        String::new()
+    };
+    if tab.zoomed {
+        label.push_str(" Z");
     }
+    let budget = MAX_TAB_WIDTH.saturating_sub(4) as usize;
+    let used = (display_width(&prefix) + display_width(glyph)) as usize;
+    let label = crate::ui::truncate_end(&label, budget.saturating_sub(used));
+    (prefix, glyph, label)
 }
 
 #[cfg(test)]

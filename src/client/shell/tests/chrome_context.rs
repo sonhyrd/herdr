@@ -523,3 +523,69 @@ fn close_confirmation_error_becomes_client_owned_overlay_and_stable_group_close(
             if params.workspace_id == "ws_1" && params.close_group
     ));
 }
+
+#[test]
+fn tab_bar_shows_position_glyph_and_capped_custom_label() {
+    let mut projected = snapshot();
+    let long = "a".repeat(60);
+    projected.tabs.extend([
+        // A closed tab leaves a gap: the public number 3 must render as position 2.
+        ClientShellTab {
+            tab_id: "tab_3".into(),
+            workspace_id: "ws_1".into(),
+            number: 3,
+            label: "api-server".into(),
+            custom_label: true,
+            zoomed: false,
+            focused: false,
+            agent_status: AgentStatus::Working,
+        },
+        ClientShellTab {
+            tab_id: "tab_4".into(),
+            workspace_id: "ws_1".into(),
+            number: 4,
+            label: long,
+            custom_label: true,
+            zoomed: false,
+            focused: false,
+            agent_status: AgentStatus::Blocked,
+        },
+    ]);
+    let mut config = Config::default();
+    config.ui.status_indicators = crate::config::StatusIndicatorStyle::Symbols;
+    let shell_config = ClientShellConfig::from_config(&config);
+    let palette = shell_config.palette.clone();
+    let mut state = ClientShellState::new(shell_config);
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    let frame = state.compose(200, 20).expect("tab bar");
+
+    let tab = |id: &str| state.hits.tabs.iter().find(|(_, t)| t == id).expect(id).0;
+    let tab_bar_row = |frame: &_, rect: Rect| -> String {
+        let frame: &crate::protocol::FrameData = frame;
+        (rect.x..rect.right())
+            .map(|x| {
+                frame.cells[(rect.y * frame.width + x) as usize]
+                    .symbol
+                    .as_str()
+            })
+            .collect()
+    };
+    let first = tab_bar_row(&frame, tab("tab_1"));
+    assert!(first.contains("1 ○"), "auto tab rendered as {first:?}");
+    let api = tab("tab_3");
+    let text = tab_bar_row(&frame, api);
+    assert!(
+        text.contains("2 ◐ api-server"),
+        "custom tab rendered as {text:?}"
+    );
+    let glyph_x = api.x + text.chars().position(|c| c == '◐').expect("glyph") as u16;
+    assert_eq!(
+        frame.cells[(api.y * frame.width + glyph_x) as usize].fg,
+        crate::protocol::color_to_u32(palette.yellow)
+    );
+    let capped = tab("tab_4");
+    assert!(capped.width <= 24, "long tab is {} wide", capped.width);
+    let text = tab_bar_row(&frame, capped);
+    assert!(text.contains("3 × aaa") && text.contains('…'), "{text:?}");
+}
