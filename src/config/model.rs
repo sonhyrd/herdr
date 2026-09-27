@@ -980,7 +980,8 @@ pub struct UiConfig {
     pub status_indicators: StatusIndicatorStyle,
     /// Chrome style: "modern" (rounded popups, pill tabs, status bars) or "classic". Default: "modern".
     pub chrome: ChromeStyle,
-    /// Animate chrome (toast slide, popup fade, tab sweep, working spinner). Default: true.
+    /// Animate chrome (toast slide, popup fade, tab sweep, fleet-counter spinner). Default: false.
+    /// Off by default: with agents always working, a spinner means a constant repaint stream.
     /// HERDR_REDUCE_MOTION=1 also turns animation off.
     pub animations: bool,
     /// Expanded sidebar row composition.
@@ -1209,7 +1210,7 @@ impl Default for UiConfig {
             _legacy_agent_panel_scope: None,
             status_indicators: StatusIndicatorStyle::Dots,
             chrome: ChromeStyle::Modern,
-            animations: true,
+            animations: false,
             sidebar: SidebarConfig::default(),
             accent: "cyan".into(),
             toast: ToastConfig::default(),
@@ -1458,21 +1459,21 @@ agent_panel_scope = "current"
     }
 
     #[test]
-    fn chrome_defaults_to_modern_with_animations_and_parses_classic() {
+    fn chrome_defaults_to_modern_without_animations_and_parses_classic() {
         let default = Config::default();
         assert_eq!(default.ui.chrome, ChromeStyle::Modern);
-        assert!(default.ui.animations);
+        assert!(!default.ui.animations);
 
         let config: Config = toml::from_str(
             r#"
 [ui]
 chrome = "classic"
-animations = false
+animations = true
 "#,
         )
         .unwrap();
         assert_eq!(config.ui.chrome, ChromeStyle::Classic);
-        assert!(!config.ui.animations);
+        assert!(config.ui.animations);
     }
 
     #[test]

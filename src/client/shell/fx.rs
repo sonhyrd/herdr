@@ -1,12 +1,12 @@
 //! Chrome motion: toast slide-in, popup fade-in, tab-switch sweep and the
-//! Working spinner.
+//! Working spinner on the fleet counter (the only glyph that spins).
 //!
 //! `observe` compares this frame's chrome against the last one and queues an
 //! effect for whatever just appeared. Every effect is clipped to a chrome rect
 //! taken from the hit map, never a pane rect, so terminal output is never
-//! animated. Frame 0 of each effect is today's glyph and colour, and with
-//! motion off nothing is queued, the spinner stays on frame 0 and `deadline`
-//! asks for no extra wake-ups.
+//! animated. With motion off nothing is queued and the spinner stays at 0 (the
+//! static glyph); the only wake-ups left are coarse repaints of a visible
+//! toast's countdown, which would otherwise freeze at a false remaining time.
 
 use std::mem::Discriminant;
 use std::time::{Duration, Instant};
@@ -20,6 +20,8 @@ use super::{ClientShellOverlay, Palette, ShellHitMap};
 
 const FRAME: Duration = Duration::from_millis(16);
 const SPIN_STEP: Duration = Duration::from_millis(100);
+/// Toast countdown repaint step when motion is off.
+const STILL_STEP: Duration = Duration::from_millis(250);
 const SPIN_FRAMES: u8 = crate::ui::SPINNER.len() as u8;
 
 // `EffectManager<K>: Default` needs `K: Default`.
@@ -38,7 +40,7 @@ pub(super) struct FxFrame<'a> {
     /// Identity of the visible toast (its deadline is unique per toast).
     pub(super) toast: Option<Instant>,
     pub(super) active_tab: Option<&'a str>,
-    /// A Working status glyph is on screen, so the spinner should turn.
+    /// The fleet counter shows a Working glyph, so the spinner should turn.
     pub(super) working_visible: bool,
     pub(super) palette: &'a Palette,
 }
@@ -108,9 +110,13 @@ impl ShellFx {
         self.prev_overlay = overlay;
         self.prev_tab = frame.active_tab.map(str::to_owned);
         self.toast_visible = frame.toast.is_some();
-        self.working_visible = frame.working_visible;
+        self.working_visible = frame.working_visible && self.enabled;
         if !self.working_visible {
             self.spin = 0;
+        } else if self.spin == 0 {
+            self.spin = 1;
+        }
+        if !(self.working_visible || self.toast_visible) {
             self.spin_at = None;
         } else if self.spin_at.is_none() {
             self.spin_at = Some(now);
@@ -193,38 +199,43 @@ impl ShellFx {
             .process_effects(tachyonfx::Duration::from_millis(millis), buf, area);
     }
 
-    /// When the render loop should wake next for motion, if at all.
-    pub(super) fn deadline(&self, now: Instant) -> Option<Instant> {
-        if !self.enabled {
-            return None;
+    fn spinning(&self) -> bool {
+        self.enabled && self.working_visible
+    }
+
+    fn step(&self) -> Duration {
+        if self.enabled {
+            SPIN_STEP
+        } else {
+            STILL_STEP
         }
-        if self.mgr.is_running() {
+    }
+
+    /// When the render loop should wake next, if at all.
+    pub(super) fn deadline(&self, now: Instant) -> Option<Instant> {
+        if self.running() {
             return Some(now + FRAME);
         }
-        if self.working_visible || self.toast_visible {
-            return Some(self.spin_at.unwrap_or(now) + SPIN_STEP);
-        }
-        None
+        (self.spinning() || self.toast_visible).then(|| self.spin_at.unwrap_or(now) + self.step())
     }
 
     /// Advance the spinner (and the toast countdown) and say whether to repaint.
     pub(super) fn tick(&mut self, now: Instant) -> bool {
-        if !self.enabled {
-            return false;
-        }
-        if self.mgr.is_running() {
+        if self.running() {
             return true;
         }
-        if !(self.working_visible || self.toast_visible) {
+        let spinning = self.spinning();
+        if !(spinning || self.toast_visible) {
             return false;
         }
+        let step = self.step();
         let due = self
             .spin_at
-            .is_none_or(|at| now.saturating_duration_since(at) >= SPIN_STEP);
+            .is_none_or(|at| now.saturating_duration_since(at) >= step);
         if due {
             self.spin_at = Some(now);
-            if self.working_visible {
-                self.spin = (self.spin + 1) % SPIN_FRAMES;
+            if spinning {
+                self.spin = self.spin % SPIN_FRAMES + 1;
             }
         }
         due
@@ -305,11 +316,30 @@ mod tests {
             notification_toast: Rect::new(10, 1, 20, 4),
             ..ShellHitMap::default()
         };
-        fx.observe(frame(&hits, Some(now), true, &palette), now);
+        fx.observe(frame(&hits, None, true, &palette), now);
         assert!(!fx.running());
         assert!(!fx.tick(now + Duration::from_secs(1)));
         assert_eq!(fx.deadline(now), None);
         assert_eq!(fx.spin(), 0);
+    }
+
+    #[test]
+    fn toast_countdown_still_repaints_with_motion_off() {
+        let now = Instant::now();
+        let palette = palette();
+        let mut fx = ShellFx::new(true);
+        let hits = ShellHitMap {
+            notification_toast: Rect::new(10, 1, 20, 4),
+            ..ShellHitMap::default()
+        };
+        fx.observe(frame(&hits, Some(now), true, &palette), now);
+        assert!(!fx.running());
+        assert_eq!(fx.deadline(now), Some(now + STILL_STEP));
+        assert!(!fx.tick(now + Duration::from_millis(100)));
+        assert!(fx.tick(now + STILL_STEP));
+        assert_eq!(fx.spin(), 0, "the spinner stays static");
+        fx.observe(frame(&ShellHitMap::default(), None, true, &palette), now);
+        assert_eq!(fx.deadline(now), None);
     }
 
     #[test]
@@ -328,31 +358,34 @@ mod tests {
     }
 
     #[test]
-    fn spinner_cycles_all_frames_and_frame_zero_is_the_static_glyph() {
+    fn spinner_cycles_only_braille_and_the_half_disc_means_motion_off() {
         use crate::api::schema::AgentStatus;
         use crate::config::{ChromeStyle, StatusIndicatorStyle};
+        let glyph = |spin| {
+            super::super::status_icon_frame(
+                AgentStatus::Working,
+                StatusIndicatorStyle::Symbols,
+                ChromeStyle::Modern,
+                spin,
+            )
+        };
         let now = Instant::now();
         let palette = palette();
         let hits = ShellHitMap::default();
         let mut fx = ShellFx::new(false);
         fx.observe(frame(&hits, None, true, &palette), now);
-        assert_eq!(
-            super::super::status_icon_frame(
-                AgentStatus::Working,
-                StatusIndicatorStyle::Symbols,
-                ChromeStyle::Modern,
-                fx.spin()
-            ),
-            super::super::status_icon(AgentStatus::Working, StatusIndicatorStyle::Symbols)
-        );
         let mut seen = std::collections::HashSet::new();
-        for step in 1..=SPIN_FRAMES as u64 {
+        seen.insert(glyph(fx.spin()));
+        for step in 1..=SPIN_FRAMES as u64 * 2 {
             assert!(fx.tick(now + SPIN_STEP * step as u32));
-            seen.insert(fx.spin());
+            seen.insert(glyph(fx.spin()));
         }
-        assert_eq!(seen.len(), usize::from(SPIN_FRAMES));
-        assert_eq!(fx.spin(), 0, "a full cycle returns to the static frame");
+        assert_eq!(seen, crate::ui::SPINNER.into_iter().collect());
         // Between steps nothing repaints.
-        assert!(!fx.tick(now + SPIN_STEP * SPIN_FRAMES as u32 + Duration::from_millis(10)));
+        assert!(!fx.tick(now + SPIN_STEP * 20 + Duration::from_millis(10)));
+
+        fx.set_enabled(false);
+        fx.observe(frame(&hits, None, true, &palette), now);
+        assert_eq!(glyph(fx.spin()), "◐");
     }
 }

@@ -198,8 +198,10 @@ fn status_icon(
     }
 }
 
-/// `status_icon` for a frame of the Working spinner. `spin = 0` (and motion
-/// off) keeps the static glyph; modern chrome swaps in bolder symbols.
+/// `status_icon` for a frame of the Working spinner. `spin = 0` (motion off,
+/// or a glyph that never spins) keeps the static glyph; `1..` is braille frame
+/// `spin - 1`, so a running cycle never flashes the half-disc. Modern chrome
+/// swaps in bolder symbols.
 fn status_icon_frame(
     status: crate::api::schema::AgentStatus,
     style: crate::config::StatusIndicatorStyle,
@@ -210,7 +212,7 @@ fn status_icon_frame(
     use crate::config::{ChromeStyle, StatusIndicatorStyle};
     match (chrome, style, status) {
         (ChromeStyle::Modern, StatusIndicatorStyle::Symbols, AgentStatus::Working) if spin > 0 => {
-            crate::ui::SPINNER[usize::from(spin) % crate::ui::SPINNER.len()]
+            crate::ui::SPINNER[usize::from(spin - 1) % crate::ui::SPINNER.len()]
         }
         (ChromeStyle::Modern, StatusIndicatorStyle::Symbols, AgentStatus::Blocked) => "✕",
         _ => status_icon(status, style),

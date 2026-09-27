@@ -55,7 +55,6 @@ pub(super) fn render_agent_panel(
     snapshot: &ClientShellSnapshot,
     config: &ClientShellConfig,
     agent_scroll: &mut usize,
-    spin: u8,
     hits: &mut ShellHitMap,
 ) {
     if !render_agent_panel_header(
@@ -83,7 +82,7 @@ pub(super) fn render_agent_panel(
         |row| row.rows.len(),
         |buffer, rect, row, hits| {
             hits.agents.push((rect, row.pane_id.clone()));
-            render_agent_row(buffer, rect, row, config, spin);
+            render_agent_row(buffer, rect, row, config);
         },
     );
 }
@@ -348,7 +347,6 @@ pub(super) fn render_agent_row(
     rect: Rect,
     row: &AgentRow,
     config: &ClientShellConfig,
-    spin: u8,
 ) {
     let palette = &config.palette;
     let modern = config.chrome == crate::config::ChromeStyle::Modern;
@@ -367,9 +365,14 @@ pub(super) fn render_agent_row(
             .add_modifier(Modifier::BOLD)
     };
     let status_style = Style::default().fg(status_color(row.status, palette));
-    let secondary = Style::default().fg(palette.overlay0);
+    // The modern selection fill is accent-tinted: secondary grey on it is unreadable.
+    let secondary = Style::default().fg(if row.focused && modern {
+        palette.text
+    } else {
+        palette.overlay0
+    });
     let icon = (
-        status_icon_frame(row.status, config.status_indicators, config.chrome, spin),
+        status_icon_frame(row.status, config.status_indicators, config.chrome, 0),
         Style::default().fg(status_color(row.status, palette)),
     );
     let rows = if row.rows.is_empty() {

@@ -85,7 +85,10 @@ pub(crate) fn pill(buf: &mut Buffer, rect: Rect, text: &str, fill: Color, fg: Co
     if bold {
         style = style.add_modifier(Modifier::BOLD);
     }
-    buf.set_style(area, style);
+    // Blank the cells first: a pill drawn over a border must not keep its `─`.
+    for x in area.left()..area.right() {
+        buf[(x, area.y)].set_symbol(" ").set_style(style);
+    }
     let pad = u16::from(capped);
     let inner_w = area.width - 2 * pad;
     let text_w = (unicode_width::UnicodeWidthStr::width(text) as u16).min(inner_w);

@@ -466,6 +466,14 @@ impl ClientShellState {
             .find(|endpoint| endpoint.endpoint_id == self.active_endpoint_id)
             .filter(|endpoint| endpoint.status != ClientEndpointStatus::Online)
             .map(|endpoint| (endpoint.label.clone(), endpoint.status));
+        // Bottom toasts sit above the mode bar, which is restored over the
+        // frame afterwards and would otherwise hide their bottom edge.
+        let toast_area = Rect::new(
+            0,
+            0,
+            cols,
+            mode_bar.map_or(rows, |bar| if bar.y > 0 { bar.y } else { rows }),
+        );
         if has_config_diagnostic
             || active_lifecycle.is_some()
             || self.visible_endpoint_notice.is_some()
@@ -502,7 +510,7 @@ impl ClientShellState {
                 self.hits.notification_toast = if layout.mobile_header.is_empty() {
                     endpoint_notices::render_notice(
                         &mut composed,
-                        Rect::new(0, 0, cols, rows),
+                        toast_area,
                         notice,
                         u16::from(has_config_diagnostic) + lifecycle_offset,
                         &self.config.palette,
@@ -521,7 +529,7 @@ impl ClientShellState {
                 self.hits.notification_toast = if layout.mobile_header.is_empty() {
                     notifications::render_visible_notification(
                         &mut composed,
-                        Rect::new(0, 0, cols, rows),
+                        toast_area,
                         notification,
                         self.config.toast_position,
                         u16::from(has_config_diagnostic) + lifecycle_offset,
@@ -746,14 +754,13 @@ impl ClientShellState {
             self.hits.pane_splits.clear();
             self.hits.popup = None;
         }
-        let working = crate::api::schema::AgentStatus::Working;
+        // Only the tab bar's fleet counter spins; tabs and sidebar rows stay still.
         let working_visible = self.config.chrome == crate::config::ChromeStyle::Modern
-            && self.config.status_indicators == crate::config::StatusIndicatorStyle::Symbols
-            && (snapshot
+            && !layout.tab_bar.is_empty()
+            && snapshot
                 .workspaces
                 .iter()
-                .any(|w| w.agent_status == working)
-                || snapshot.agents.iter().any(|a| a.agent_status == working));
+                .any(|w| w.agent_status == crate::api::schema::AgentStatus::Working);
         let active_tab = snapshot
             .tabs
             .iter()

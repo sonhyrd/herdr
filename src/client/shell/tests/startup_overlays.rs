@@ -585,6 +585,46 @@ fn config_diagnostic_offsets_only_the_pane_rows_it_overlaps() {
 }
 
 #[test]
+fn bottom_toast_sits_above_the_mode_bar_with_its_countdown_visible() {
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.toast_delay_seconds = 0;
+    let mut state = ClientShellState::new(config);
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.visible_notification = Some(ClientVisibleNotification {
+        endpoint_id: ClientEndpointId::Local,
+        event: SemanticNotification {
+            kind: SemanticNotificationKind::Custom,
+            title: "notification".into(),
+            body: Some("body".into()),
+            sound: None,
+            agent: None,
+            workspace_id: None,
+            tab_id: None,
+            pane_id: None,
+            position: Some(crate::config::ToastHerdrPosition::BottomRight),
+        },
+        deadline: std::time::Instant::now() + std::time::Duration::from_secs(60),
+    });
+    state.mode = ClientShellMode::Prefix;
+
+    let frame = state.compose(106, 20).expect("prefix frame");
+    let toast = state.hits.notification_toast;
+    let row = |y: u16| -> String {
+        (0..frame.width)
+            .map(|x| frame.cells[(y * frame.width + x) as usize].symbol.as_str())
+            .collect()
+    };
+    assert!(row(19).contains("PREFIX"), "{}", row(19));
+    assert_eq!(toast.bottom(), 19, "toast ends right above the mode bar");
+    let bottom_edge = row(toast.bottom() - 1);
+    assert!(
+        bottom_edge.contains('╰') && bottom_edge.contains('━'),
+        "{bottom_edge}"
+    );
+}
+
+#[test]
 fn endpoint_reload_result_does_not_override_snapshot_diagnostic_authority() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     let mut endpoint_snapshot = snapshot();

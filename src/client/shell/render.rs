@@ -325,7 +325,7 @@ pub(super) struct ShellRenderState<'a> {
     pub(super) reveal_navigation_workspace: &'a mut bool,
     pub(super) dragged_workspace_id: Option<&'a str>,
     pub(super) workspace_drop_indicator_row: Option<u16>,
-    /// Working-spinner frame (0 = static glyph).
+    /// Working-spinner frame for the fleet counter (0 = static glyph, motion off).
     pub(super) spin: u8,
 }
 

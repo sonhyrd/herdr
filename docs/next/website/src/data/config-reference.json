@@ -1067,8 +1067,8 @@
         {
           "key": "ui.animations",
           "type": "boolean",
-          "default": "true",
-          "description": "Animate toasts, popups, tab switches and the working spinner. HERDR_REDUCE_MOTION=1 also turns animation off."
+          "default": "false",
+          "description": "Animate toasts, popups, tab switches and the working spinner on the tab bar's fleet counter. HERDR_REDUCE_MOTION=1 also turns animation off."
         },
         {
           "key": "ui.sidebar.agents.row_gap",

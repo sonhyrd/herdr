@@ -477,10 +477,11 @@ pub(super) fn render_expanded(
                     buffer,
                     nested,
                     status,
-                    status_icon_frame(status, config.status_indicators, config.chrome, state.spin),
+                    status_icon_frame(status, config.status_indicators, config.chrome, 0),
                     entry,
                     tokens,
-                    endpoint_active && workspace.focused,
+                    (endpoint_active && workspace.focused)
+                        || (config.chrome == crate::config::ChromeStyle::Modern && selected),
                     selected,
                     state.selected_workspace_id.is_some(),
                     false,

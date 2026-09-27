@@ -725,7 +725,18 @@ fn help_overlay_restores_released_search_scroll_and_custom_binding_behavior() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("global"));
+    assert!(
+        text.contains("GLOBAL"),
+        "modern help headings are uppercase"
+    );
+    assert!(
+        text.contains("╭ ◆ keybinds ─"),
+        "modern popups title their border"
+    );
+    assert!(
+        text.contains("▍ GLOBAL ─"),
+        "modern section headings are ruled"
+    );
     assert!(state.hits.help_max_scroll > 0);
     assert_ne!(state.hits.help_scrollbar, Rect::default());
 
@@ -742,7 +753,7 @@ fn help_overlay_restores_released_search_scroll_and_custom_binding_behavior() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("custom"));
+    assert!(text.contains("CUSTOM"));
     assert!(text.contains("run plugin action"));
     state.handle_input_bytes(b"\x1b");
 

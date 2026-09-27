@@ -666,30 +666,15 @@ fn render_pane_border_titles(
             continue;
         }
         if app.chrome == crate::config::ChromeStyle::Modern {
-            let label = title.trim();
-            let max = end_x.saturating_sub(start_x);
-            if info.is_focused {
-                // ▐ label ▌ : caps plus a space of padding each side.
-                let label = truncate_end(label, usize::from(max.saturating_sub(4)));
-                let width = (display_width(&label) as u16).saturating_add(4).min(max);
-                super::widgets::pill(
-                    buf,
-                    Rect::new(start_x, y, width, 1),
-                    &label,
-                    app.palette.accent,
-                    panel_contrast_fg(&app.palette),
-                    true,
-                );
-            } else {
-                let label = truncate_end(label, usize::from(max.saturating_sub(2)));
-                buf.set_stringn(
-                    start_x,
-                    y,
-                    format!("╴{label}╶"),
-                    usize::from(max),
-                    Style::default().fg(app.palette.overlay0),
-                );
-            }
+            render_modern_pane_title(
+                buf,
+                start_x,
+                end_x,
+                y,
+                &title,
+                info.is_focused,
+                &app.palette,
+            );
             continue;
         }
         let color = if info.is_focused {
@@ -707,6 +692,43 @@ fn render_pane_border_titles(
             title,
             end_x.saturating_sub(start_x) as usize,
             style,
+        );
+    }
+}
+
+/// Modern pane title on the top border between `start_x` and `end_x`: the
+/// focused pane's as an accent `▐ label ▌` pill, the others as `╴label╶`.
+fn render_modern_pane_title(
+    buf: &mut Buffer,
+    start_x: u16,
+    end_x: u16,
+    y: u16,
+    title: &str,
+    focused: bool,
+    palette: &Palette,
+) {
+    let label = title.trim();
+    let max = end_x.saturating_sub(start_x);
+    if focused {
+        // ▐ label ▌ : caps plus a space of padding each side.
+        let label = truncate_end(label, usize::from(max.saturating_sub(4)));
+        let width = (display_width(&label) as u16).saturating_add(4).min(max);
+        super::widgets::pill(
+            buf,
+            Rect::new(start_x, y, width, 1),
+            &label,
+            palette.accent,
+            panel_contrast_fg(palette),
+            true,
+        );
+    } else {
+        let label = truncate_end(label, usize::from(max.saturating_sub(2)));
+        buf.set_stringn(
+            start_x,
+            y,
+            format!("╴{label}╶"),
+            usize::from(max),
+            Style::default().fg(palette.overlay0),
         );
     }
 }
@@ -1158,6 +1180,36 @@ mod tests {
         assert_eq!(buffer[(2, 2)].style().fg, Some(app.palette.accent));
         assert_eq!(buffer[(2, 1)].symbol(), "│");
         assert_eq!(buffer[(2, 1)].style().fg, Some(app.palette.accent));
+    }
+
+    #[test]
+    fn modern_pane_titles_pill_the_focused_pane_and_tick_the_others() {
+        let palette = AppState::test_new().palette;
+        let row = |buffer: &Buffer| -> String {
+            buffer.content.iter().map(|cell| cell.symbol()).collect()
+        };
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 20, 1));
+        buffer.set_string(0, 0, "╭──────────────────╮", Style::default());
+        render_modern_pane_title(&mut buffer, 1, 19, 0, " claude ", true, &palette);
+        assert_eq!(row(&buffer), "╭▐ claude ▌────────╮");
+        assert_eq!(buffer[(3, 0)].fg, panel_contrast_fg(&palette));
+        assert_eq!(buffer[(3, 0)].bg, palette.accent);
+        assert_eq!(buffer[(1, 0)].fg, palette.accent);
+
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 20, 1));
+        buffer.set_string(0, 0, "╭──────────────────╮", Style::default());
+        render_modern_pane_title(
+            &mut buffer,
+            1,
+            19,
+            0,
+            "a-very-long-pane-title",
+            false,
+            &palette,
+        );
+        let text = row(&buffer);
+        assert!(text.starts_with("╭╴a-very-long-pan…╶"), "{text}");
+        assert_eq!(buffer[(2, 0)].fg, palette.overlay0);
     }
 
     #[test]

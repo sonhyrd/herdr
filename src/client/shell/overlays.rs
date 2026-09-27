@@ -274,6 +274,70 @@ fn panel(
     }
     Some(Rect::new(a.x + 1, a.y + 1, a.width - 2, a.height - 2))
 }
+/// `panel`, with the title on the top border in modern chrome.
+fn titled_panel(
+    b: &mut Buffer,
+    a: Rect,
+    c: ratatui::style::Color,
+    bg: ratatui::style::Color,
+    modern: bool,
+    title: &str,
+) -> Option<Rect> {
+    if modern && a.width >= 2 && a.height >= 2 {
+        return Some(crate::ui::float_frame(b, a, Some(title), c, bg));
+    }
+    panel(b, a, c, bg, modern)
+}
+/// A key drawn as a raised cap: ` ctrl+b ` on surface1.
+fn key_cap_style(p: &Palette) -> Style {
+    Style::default()
+        .fg(p.text)
+        .bg(p.surface1)
+        .add_modifier(Modifier::BOLD)
+}
+/// Modern footer: each key as a cap followed by what it does.
+fn key_hints(b: &mut Buffer, r: Rect, hints: &[(&str, &str)], p: &Palette) {
+    let base = Style::default().fg(p.overlay1).bg(p.panel_bg);
+    b.set_style(r, base);
+    let right = r.right();
+    let mut x = r.x.saturating_add(1);
+    for (index, (key, desc)) in hints.iter().enumerate() {
+        if index > 0 {
+            x = put_segment(b, x, r.y, right, "  ", base);
+        }
+        x = put_segment(b, x, r.y, right, &format!(" {key} "), key_cap_style(p));
+        x = put_segment(b, x, r.y, right, &format!(" {desc}"), base);
+    }
+}
+/// Modern section heading: `▍ TITLE ───────` in the accent.
+fn section_heading(b: &mut Buffer, x: u16, y: u16, width: u16, title: &str, p: &Palette) {
+    let bg = Style::default().bg(p.panel_bg);
+    let right = x.saturating_add(width);
+    let mut cursor = put_segment(b, x, y, right, "▍ ", bg.fg(p.accent));
+    cursor = put_segment(
+        b,
+        cursor,
+        y,
+        right,
+        &title.to_uppercase(),
+        bg.fg(p.accent).add_modifier(Modifier::BOLD),
+    );
+    let rule = usize::from(right.saturating_sub(cursor).saturating_sub(2));
+    put_segment(
+        b,
+        cursor.saturating_add(1),
+        y,
+        right,
+        &"─".repeat(rule),
+        bg.fg(p.surface1),
+    );
+}
+/// Modern input well: the row inset one cell and filled with surface0.
+fn input_well(b: &mut Buffer, r: Rect, p: &Palette) -> Style {
+    let style = Style::default().bg(p.surface0);
+    b.set_style(r, style);
+    style
+}
 fn popup(a: Rect, w: u16, h: u16) -> Option<Rect> {
     let w = w.min(a.width.saturating_sub(4));
     let h = h.min(a.height.saturating_sub(2));
@@ -734,15 +798,17 @@ fn render_navigator_overlay(
         height,
     )
     .intersection(a);
-    let i = panel(b, q, p.accent, p.panel_bg, modern)?;
-    put_text(
-        b,
-        q.x + 2,
-        q.y,
-        q.width.saturating_sub(4),
-        " Go to ",
-        Style::default().fg(p.accent).bg(p.panel_bg),
-    );
+    let i = titled_panel(b, q, p.accent, p.panel_bg, modern, "Go to")?;
+    if !modern {
+        put_text(
+            b,
+            q.x + 2,
+            q.y,
+            q.width.saturating_sub(4),
+            " Go to ",
+            Style::default().fg(p.accent).bg(p.panel_bg),
+        );
+    }
     let rows = super::aggregate_navigation::navigator_rows(endpoints, active_endpoint_id, n);
     let search = if n.search_focused {
         " / ".to_owned()
@@ -773,15 +839,23 @@ fn render_navigator_overlay(
             "terminals"
         }
     );
+    let search_width = i.width.saturating_sub(display_width(&count) + 1);
+    let field_bg = if modern {
+        input_well(b, Rect::new(i.x, i.y, search_width, 1), p)
+            .bg
+            .unwrap_or(p.panel_bg)
+    } else {
+        p.panel_bg
+    };
     put_text(
         b,
         i.x,
         i.y,
-        i.width.saturating_sub(display_width(&count) + 1),
+        search_width,
         &search,
         Style::default()
             .fg(if n.search_focused { p.text } else { p.overlay0 })
-            .bg(p.panel_bg),
+            .bg(field_bg),
     );
     let cursor = if n.search_focused {
         text_editor::render(
@@ -793,7 +867,7 @@ fn render_navigator_overlay(
                 1,
             ),
             &n.query,
-            Style::default().fg(p.text).bg(p.panel_bg),
+            Style::default().fg(p.text).bg(field_bg),
         )
     } else {
         None
@@ -805,14 +879,24 @@ fn render_navigator_overlay(
         &count,
         Style::default().fg(p.overlay0).bg(p.panel_bg),
     );
-    put_text(
-        b,
-        i.x,
-        i.y + 1,
-        i.width,
-        &"─".repeat(i.width as usize),
-        Style::default().fg(p.surface1).bg(p.panel_bg),
-    );
+    if modern {
+        super::put_inset_rule(
+            b,
+            i.x,
+            i.y + 1,
+            i.width,
+            Style::default().fg(p.surface1).bg(p.panel_bg),
+        );
+    } else {
+        put_text(
+            b,
+            i.x,
+            i.y + 1,
+            i.width,
+            &"─".repeat(i.width as usize),
+            Style::default().fg(p.surface1).bg(p.panel_bg),
+        );
+    }
     let body = Rect::new(i.x, i.y + 2, i.width, i.height.saturating_sub(5));
     let selected = super::aggregate_navigation::navigator_selected_index(&rows, n).unwrap_or(0);
     let max = rows.len().saturating_sub(body.height as usize);
@@ -1034,18 +1118,34 @@ fn render_navigator_overlay(
             Style::default().fg(p.overlay0).bg(p.panel_bg),
         );
     }
-    put_text(
-        b,
-        i.x,
-        i.bottom() - 1,
-        i.width,
-        if n.search_focused {
-            " search type · move ↑↓/ctrl+n/p · open enter · back esc"
+    if modern {
+        let hints: &[(&str, &str)] = if n.search_focused {
+            &[("↑↓", "move"), ("↵", "open"), ("esc", "back")]
         } else {
-            " ↑↓/j/k rows · ←→ workspace · / search · a/b/w/i/d filter · enter open · esc close"
-        },
-        Style::default().fg(p.overlay0).bg(p.panel_bg),
-    );
+            &[
+                ("↑↓", "rows"),
+                ("←→", "workspace"),
+                ("/", "search"),
+                ("a/b/w/i/d", "filter"),
+                ("↵", "open"),
+                ("esc", "close"),
+            ]
+        };
+        key_hints(b, Rect::new(i.x, i.bottom() - 1, i.width, 1), hints, p);
+    } else {
+        put_text(
+            b,
+            i.x,
+            i.bottom() - 1,
+            i.width,
+            if n.search_focused {
+                " search type · move ↑↓/ctrl+n/p · open enter · back esc"
+            } else {
+                " ↑↓/j/k rows · ←→ workspace · / search · a/b/w/i/d filter · enter open · esc close"
+            },
+            Style::default().fg(p.overlay0).bg(p.panel_bg),
+        );
+    }
     Some(OverlayRender {
         area: q,
         primary: Rect::default(),
@@ -1063,10 +1163,13 @@ fn render_navigator_overlay(
     })
 }
 
+/// Keybind help rows. `modern_width` (modern chrome) draws `▍ GROUP ───` headings
+/// ruled out to that width and each key as a raised cap.
 fn help_lines(
     keybinds: &LiveKeybindConfig,
     query: &str,
     palette: &Palette,
+    modern_width: Option<u16>,
 ) -> Vec<(usize, ratatui::text::Line<'static>)> {
     use ratatui::text::{Line, Span};
 
@@ -1091,6 +1194,36 @@ fn help_lines(
     }
 
     let mut lines = Vec::new();
+    if let Some(width) = modern_width {
+        let bg = Style::default().bg(palette.panel_bg);
+        for (group, entries) in groups {
+            let title = group.to_uppercase();
+            let rule = usize::from(width).saturating_sub(title.chars().count() + 5);
+            lines.push((
+                title.chars().count() + 4 + rule,
+                Line::from(vec![
+                    Span::styled(" ▍ ", bg.fg(palette.accent)),
+                    Span::styled(title, bg.fg(palette.accent).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" {}", "─".repeat(rule)), bg.fg(palette.surface1)),
+                ]),
+            ));
+            for (key, label) in entries {
+                let pad = key_width.saturating_sub(key.chars().count());
+                let width = key_width + 6 + label.chars().count();
+                lines.push((
+                    width,
+                    Line::from(vec![
+                        Span::styled("   ", bg),
+                        Span::styled(format!(" {key} "), key_cap_style(palette)),
+                        Span::styled(" ".repeat(pad + 1), bg),
+                        Span::styled(label.into_owned(), bg.fg(palette.text)),
+                    ]),
+                ));
+            }
+            lines.push((0, Line::raw("")));
+        }
+        return lines;
+    }
     for (group, entries) in groups {
         lines.push((
             group.len() + 1,
@@ -1137,21 +1270,35 @@ fn render_help_overlay(
     use ratatui::widgets::{Paragraph, Widget, Wrap};
 
     let q = popup(b.area, 76, 22)?;
-    let i = panel(b, q, p.accent, p.panel_bg, modern)?;
+    let i = titled_panel(b, q, p.accent, p.panel_bg, modern, "keybinds")?;
     if i.width < 20 || i.height < 6 {
         return None;
     }
-    put_text(
-        b,
-        i.x,
-        i.y,
-        i.width,
-        "keybinds",
-        Style::default()
-            .fg(p.text)
-            .bg(p.panel_bg)
-            .add_modifier(Modifier::BOLD),
-    );
+    if modern {
+        // The title lives on the border; this row names the prefix key instead.
+        let bg = Style::default().bg(p.panel_bg);
+        let x = put_segment(b, i.x + 1, i.y, i.right(), "prefix ", bg.fg(p.overlay1));
+        put_segment(
+            b,
+            x,
+            i.y,
+            i.right().saturating_sub(14),
+            &format!(" {} ", crate::config::format_key_combo(k.prefix)),
+            key_cap_style(p),
+        );
+    } else {
+        put_text(
+            b,
+            i.x,
+            i.y,
+            i.width,
+            "keybinds",
+            Style::default()
+                .fg(p.text)
+                .bg(p.panel_bg)
+                .add_modifier(Modifier::BOLD),
+        );
+    }
     let close = Rect::new(i.right() - 13, i.y, 13, 1);
     button(
         b,
@@ -1168,11 +1315,18 @@ fn render_help_overlay(
         modern,
     );
     let sy = i.y + 1;
+    let field_bg = if modern {
+        input_well(b, Rect::new(i.x + 1, sy, i.width.saturating_sub(2), 1), p)
+            .bg
+            .unwrap_or(p.panel_bg)
+    } else {
+        p.panel_bg
+    };
     put_text(
         b,
-        i.x,
+        i.x + u16::from(modern),
         sy,
-        i.width,
+        i.width.saturating_sub(2 * u16::from(modern)),
         &if h.search_focused {
             " / ".to_owned()
         } else {
@@ -1180,21 +1334,27 @@ fn render_help_overlay(
         },
         Style::default()
             .fg(if h.search_focused { p.text } else { p.overlay0 })
-            .bg(p.panel_bg),
+            .bg(field_bg),
     );
     let cursor = if h.search_focused {
+        let x = i.x + 3 + u16::from(modern);
         text_editor::render(
             b,
-            Rect::new(i.x + 3, sy, i.width.saturating_sub(3), 1),
+            Rect::new(x, sy, i.right().saturating_sub(x + u16::from(modern)), 1),
             &h.query,
-            Style::default().fg(p.text).bg(p.panel_bg),
+            Style::default().fg(p.text).bg(field_bg),
         )
     } else {
         None
     };
 
     let body = Rect::new(i.x, i.y + 3, i.width, i.height.saturating_sub(5));
-    let lines = help_lines(k, &h.query, p);
+    let lines = help_lines(
+        k,
+        &h.query,
+        p,
+        modern.then_some(body.width.saturating_sub(1)),
+    );
     let viewport_rows = usize::from(body.height.max(1));
     let wrapped_rows = |width: u16| {
         let width = usize::from(width.max(1));
@@ -1245,18 +1405,39 @@ fn render_help_overlay(
         }
     }
 
-    put_text(
-        b,
-        i.x,
-        i.bottom() - 1,
-        i.width,
-        if h.search_focused {
-            " edit ←→/home/end · kill ^u/^k · yank ^y · scroll ↑↓ · back esc"
+    let footer = Rect::new(i.x, i.bottom() - 1, i.width, 1);
+    if modern {
+        let hints: &[(&str, &str)] = if h.search_focused {
+            &[
+                ("←→", "edit"),
+                ("^u/^k", "kill"),
+                ("^y", "yank"),
+                ("↑↓", "scroll"),
+                ("esc", "back"),
+            ]
         } else {
-            " search / · scroll j/k/↑↓/pgup/pgdn · close esc/enter"
-        },
-        Style::default().fg(p.overlay0).bg(p.panel_bg),
-    );
+            &[
+                ("/", "search"),
+                ("j/k", "scroll"),
+                ("pgup/pgdn", "page"),
+                ("esc", "close"),
+            ]
+        };
+        key_hints(b, footer, hints, p);
+    } else {
+        put_text(
+            b,
+            footer.x,
+            footer.y,
+            footer.width,
+            if h.search_focused {
+                " edit ←→/home/end · kill ^u/^k · yank ^y · scroll ↑↓ · back esc"
+            } else {
+                " search / · scroll j/k/↑↓/pgup/pgdn · close esc/enter"
+            },
+            Style::default().fg(p.overlay0).bg(p.panel_bg),
+        );
+    }
     Some(OverlayRender {
         area: q,
         cancel: close,

@@ -341,7 +341,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 
 # Animate toasts, popups, tab switches and the working spinner.
 # HERDR_REDUCE_MOTION=1 also turns animation off.
-# animations = true
+# animations = false
 
 # Accent color for highlights, borders, and navigation UI.
 # Accepts: hex (#89b4fa), named colors (cyan, blue, magenta), or rgb(r,g,b)

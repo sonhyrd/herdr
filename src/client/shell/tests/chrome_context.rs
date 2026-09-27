@@ -525,7 +525,7 @@ fn close_confirmation_error_becomes_client_owned_overlay_and_stable_group_close(
 }
 
 #[test]
-fn tab_bar_shows_position_glyph_and_capped_custom_label() {
+fn tab_bar_shows_position_glyph_and_full_label_until_the_strip_overflows() {
     let mut projected = snapshot();
     let long = "a".repeat(60);
     projected.tabs.extend([
@@ -584,8 +584,22 @@ fn tab_bar_shows_position_glyph_and_capped_custom_label() {
         frame.cells[(api.y * frame.width + glyph_x) as usize].fg,
         crate::protocol::color_to_u32(palette.yellow)
     );
-    let capped = tab("tab_4");
-    assert!(capped.width <= 24, "long tab is {} wide", capped.width);
+    let full = tab_bar_row(&frame, tab("tab_4"));
+    assert!(
+        full.contains(&format!("3 ✕ {}", "a".repeat(60))),
+        "{full:?}"
+    );
+
+    // Only when the strip overflows does the long tab shrink, never below the cap.
+    let frame = state.compose(80, 20).expect("narrow tab bar");
+    let capped = state
+        .hits
+        .tabs
+        .iter()
+        .find(|(_, t)| t == "tab_4")
+        .expect("tab_4")
+        .0;
+    assert!(capped.width < 60, "long tab is {} wide", capped.width);
     let text = tab_bar_row(&frame, capped);
     assert!(text.contains("3 ✕ aaa") && text.contains('…'), "{text:?}");
 }

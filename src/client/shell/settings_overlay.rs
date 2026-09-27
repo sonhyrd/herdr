@@ -11,6 +11,24 @@ fn choice_style(selected: bool, palette: &Palette) -> Style {
     }
 }
 
+fn section_title(buffer: &mut Buffer, area: Rect, title: &str, palette: &Palette, modern: bool) {
+    if modern {
+        section_heading(buffer, area.x, area.y, area.width, title, palette);
+        return;
+    }
+    put_text(
+        buffer,
+        area.x,
+        area.y,
+        area.width,
+        title,
+        Style::default()
+            .fg(palette.text)
+            .bg(palette.panel_bg)
+            .add_modifier(Modifier::BOLD),
+    );
+}
+
 fn draw_choice(
     buffer: &mut Buffer,
     rect: Rect,
@@ -49,22 +67,31 @@ pub(super) fn render_settings_overlay(
         22
     };
     let popup = popup(buffer.area, 76, height)?;
-    let inner = panel(buffer, popup, palette.accent, palette.panel_bg, modern)?;
+    let inner = titled_panel(
+        buffer,
+        popup,
+        palette.accent,
+        palette.panel_bg,
+        modern,
+        "settings",
+    )?;
     if inner.width < 20 || inner.height < 8 {
         return None;
     }
 
-    put_text(
-        buffer,
-        inner.x,
-        inner.y,
-        inner.width,
-        " settings",
-        Style::default()
-            .fg(palette.text)
-            .bg(palette.panel_bg)
-            .add_modifier(Modifier::BOLD),
-    );
+    if !modern {
+        put_text(
+            buffer,
+            inner.x,
+            inner.y,
+            inner.width,
+            " settings",
+            Style::default()
+                .fg(palette.text)
+                .bg(palette.panel_bg)
+                .add_modifier(Modifier::BOLD),
+        );
+    }
 
     let integration_badge = integration_updates_available
         || settings
@@ -91,8 +118,20 @@ pub(super) fn render_settings_overlay(
         } else {
             Style::default().fg(palette.overlay1).bg(palette.panel_bg)
         };
-        buffer.set_style(rect, style);
-        put_text(buffer, rect.x, rect.y, rect.width, &label, style);
+        if modern && active {
+            // The label's edge spaces become pill caps: same width, same hit rect.
+            crate::ui::pill(
+                buffer,
+                rect,
+                label.trim(),
+                palette.accent,
+                panel_contrast_fg(palette),
+                true,
+            );
+        } else {
+            buffer.set_style(rect, style);
+            put_text(buffer, rect.x, rect.y, rect.width, &label, style);
+        }
         if badge && !active {
             put_text(
                 buffer,
@@ -112,14 +151,24 @@ pub(super) fn render_settings_overlay(
             break;
         }
     }
-    put_text(
-        buffer,
-        inner.x,
-        inner.y + 2,
-        inner.width,
-        &"─".repeat(inner.width as usize),
-        Style::default().fg(palette.surface0).bg(palette.panel_bg),
-    );
+    if modern {
+        super::super::put_inset_rule(
+            buffer,
+            inner.x,
+            inner.y + 2,
+            inner.width,
+            Style::default().fg(palette.surface1).bg(palette.panel_bg),
+        );
+    } else {
+        put_text(
+            buffer,
+            inner.x,
+            inner.y + 2,
+            inner.width,
+            &"─".repeat(inner.width as usize),
+            Style::default().fg(palette.surface0).bg(palette.panel_bg),
+        );
+    }
 
     let content = Rect::new(
         inner.x,
@@ -168,6 +217,7 @@ pub(super) fn render_settings_overlay(
                 &["color dots  ● ● ● ○ ·", "distinct symbols  × ◐ ✓ ○ ·"],
                 settings.selected,
                 palette,
+                modern,
                 &mut choice_hits,
             );
         }
@@ -180,6 +230,7 @@ pub(super) fn render_settings_overlay(
                 &["on", "off"],
                 settings.selected,
                 palette,
+                modern,
                 &mut choice_hits,
             );
         }
@@ -192,11 +243,12 @@ pub(super) fn render_settings_overlay(
                 &["off", "inside herdr", "via terminal", "via system"],
                 settings.selected,
                 palette,
+                modern,
                 &mut choice_hits,
             );
         }
         ClientSettingsSection::Integrations => {
-            render_integrations(buffer, content, settings, palette);
+            render_integrations(buffer, content, settings, palette, modern);
         }
     }
 
@@ -237,14 +289,23 @@ pub(super) fn render_settings_overlay(
             .add_modifier(Modifier::BOLD),
         modern,
     );
-    put_text(
-        buffer,
-        inner.x,
-        inner.bottom().saturating_sub(2),
-        inner.width,
-        " ↑↓ select  tab section",
-        Style::default().fg(palette.overlay1).bg(palette.panel_bg),
-    );
+    if modern {
+        key_hints(
+            buffer,
+            Rect::new(inner.x, inner.bottom().saturating_sub(2), inner.width, 1),
+            &[("↑↓", "select"), ("tab", "section")],
+            palette,
+        );
+    } else {
+        put_text(
+            buffer,
+            inner.x,
+            inner.bottom().saturating_sub(2),
+            inner.width,
+            " ↑↓ select  tab section",
+            Style::default().fg(palette.overlay1).bg(palette.panel_bg),
+        );
+    }
 
     Some(OverlayRender {
         area: popup,
@@ -265,19 +326,10 @@ fn render_choice_section(
     choices: &[&str],
     selected: usize,
     palette: &Palette,
+    modern: bool,
     hits: &mut Vec<(Rect, usize)>,
 ) {
-    put_text(
-        buffer,
-        area.x,
-        area.y,
-        area.width,
-        title,
-        Style::default()
-            .fg(palette.text)
-            .bg(palette.panel_bg)
-            .add_modifier(Modifier::BOLD),
-    );
+    section_title(buffer, area, title, palette, modern);
     put_text(
         buffer,
         area.x,
@@ -303,18 +355,9 @@ fn render_integrations(
     area: Rect,
     settings: &ClientSettingsOverlay,
     palette: &Palette,
+    modern: bool,
 ) {
-    put_text(
-        buffer,
-        area.x,
-        area.y,
-        area.width,
-        "agent integrations",
-        Style::default()
-            .fg(palette.text)
-            .bg(palette.panel_bg)
-            .add_modifier(Modifier::BOLD),
-    );
+    section_title(buffer, area, "agent integrations", palette, modern);
     put_text(
         buffer,
         area.x,

@@ -242,16 +242,6 @@ pub(crate) fn render_sidebar(
                 .fg(palette.accent)
                 .add_modifier(Modifier::BOLD),
         );
-        let count = format!("{} ", snapshot.workspaces.len());
-        if workspace_area.width > display_width(&count) + 9 {
-            put_right_text(
-                buffer,
-                workspace_area,
-                workspace_area.y,
-                &count,
-                Style::default().fg(palette.overlay0),
-            );
-        }
     } else {
         put_text(
             buffer,
@@ -364,10 +354,12 @@ pub(crate) fn render_sidebar(
             buffer,
             rect,
             status,
-            status_icon_frame(status, config.status_indicators, config.chrome, state.spin),
+            status_icon_frame(status, config.status_indicators, config.chrome, 0),
             entry,
             rows,
-            workspace.focused,
+            // On the modern accent-tinted cursor fill, secondary grey is
+            // unreadable: draw the cursor row with the current row's bright text.
+            workspace.focused || (modern && selected),
             selected,
             state.selected_workspace_id.is_some(),
             dragged,
@@ -487,7 +479,6 @@ pub(crate) fn render_sidebar(
         snapshot,
         config,
         state.agent_scroll,
-        state.spin,
         hits,
     );
 
