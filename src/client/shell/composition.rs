@@ -77,7 +77,7 @@ impl ClientShellState {
             reveal_navigation_workspace: &mut self.reveal_navigation_workspace,
             dragged_workspace_id: None,
             workspace_drop_indicator_row: None,
-            spin: 0,
+            spin: self.fx.spin(),
         };
         if let Some(snapshot) = local_snapshot {
             render::render_sidebar(
@@ -157,6 +157,7 @@ impl ClientShellState {
     ) -> Option<crate::client::frame_output::ComposedFrame> {
         let now = std::time::Instant::now();
         self.last_composed_at = Some(now);
+        self.fx.set_enabled(self.config.animations);
         self.selection_repaint_deadline = None;
         if self.last_composed_size != Some((cols, rows)) && self.mode == ClientShellMode::Navigate {
             self.reveal_navigation_workspace = true;
@@ -237,7 +238,7 @@ impl ClientShellState {
                 reveal_navigation_workspace: &mut self.reveal_navigation_workspace,
                 dragged_workspace_id,
                 workspace_drop_indicator_row,
-                spin: 0,
+                spin: self.fx.spin(),
             },
         );
         self.hits.panes = surface
@@ -744,6 +745,43 @@ impl ClientShellState {
             self.hits.panes.clear();
             self.hits.pane_splits.clear();
             self.hits.popup = None;
+        }
+        let working = crate::api::schema::AgentStatus::Working;
+        let working_visible = self.config.chrome == crate::config::ChromeStyle::Modern
+            && self.config.status_indicators == crate::config::StatusIndicatorStyle::Symbols
+            && (snapshot
+                .workspaces
+                .iter()
+                .any(|w| w.agent_status == working)
+                || snapshot.agents.iter().any(|a| a.agent_status == working));
+        let active_tab = snapshot
+            .tabs
+            .iter()
+            .find(|tab| {
+                tab.focused
+                    && Some(tab.workspace_id.as_str()) == snapshot.focused_workspace_id.as_deref()
+            })
+            .map(|tab| tab.tab_id.as_str());
+        self.fx.observe(
+            fx::FxFrame {
+                hits: &self.hits,
+                overlay: self.overlay.as_ref(),
+                toast: self
+                    .visible_notification
+                    .as_ref()
+                    .filter(|_| !self.hits.notification_toast.is_empty())
+                    .map(|notification| notification.deadline),
+                active_tab,
+                working_visible,
+                palette: &self.config.palette,
+            },
+            now,
+        );
+        if self.fx.running() {
+            let cursor = frame.cursor.clone();
+            let mut composed = frame.to_ratatui_buffer()?;
+            self.fx.process(&mut composed, now);
+            frame.replace_from_ratatui_buffer_preserving_effects(&composed, cursor);
         }
         let graphics = self.compose_graphics(layout, &occlusion);
         Some(crate::client::frame_output::ComposedFrame { frame, graphics })

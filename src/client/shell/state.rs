@@ -886,6 +886,7 @@ pub(crate) struct ClientShellState {
     pub(super) last_composed_size: Option<(u16, u16)>,
     pub(super) last_composed_at: Option<std::time::Instant>,
     pub(super) selection_repaint_deadline: Option<std::time::Instant>,
+    pub(super) fx: super::fx::ShellFx,
     pub(super) hits: ShellHitMap,
     pub(super) endpoints: Vec<ClientShellEndpoint>,
     pub(super) active_endpoint_id: ClientEndpointId,
@@ -1051,6 +1052,8 @@ impl ClientShellState {
             last_composed_size: None,
             last_composed_at: None,
             selection_repaint_deadline: None,
+            // Tests compose deterministic frames: motion stays off under cfg(test).
+            fx: super::fx::ShellFx::new(cfg!(test) || super::fx::reduce_motion_from_env()),
             hits: ShellHitMap::default(),
             endpoints: vec![local_endpoint()],
             active_endpoint_id: ClientEndpointId::Local,
@@ -1863,9 +1866,14 @@ impl ClientShellState {
         self.selection_autoscroll_deadline
             .into_iter()
             .chain(self.selection_repaint_deadline)
+            .chain(self.fx.deadline(now))
             .min()
             .map(|deadline| deadline.saturating_duration_since(now).min(default))
             .unwrap_or(default)
+    }
+
+    pub(crate) fn tick_fx(&mut self, now: std::time::Instant) -> bool {
+        self.fx.tick(now)
     }
 
     pub(crate) fn invalidate_pane_surface(&mut self) {
