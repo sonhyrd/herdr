@@ -17,6 +17,7 @@ mod endpoint_notices;
 mod endpoint_sidebar;
 mod endpoints;
 pub(super) use endpoints::*;
+mod fx;
 mod global_menu;
 mod graphics;
 mod input;
@@ -66,6 +67,7 @@ use crate::protocol::{
 };
 #[cfg(test)]
 use crate::raw_input::RawInputEvent;
+use crate::ui::panel_contrast_fg;
 
 fn target_event_message(target: ClientInputTarget, event: ClientPaneInputEvent) -> ClientMessage {
     match target {
@@ -196,6 +198,27 @@ fn status_icon(
     }
 }
 
+/// `status_icon` for a frame of the Working spinner. `spin = 0` (motion off,
+/// or a glyph that never spins) keeps the static glyph; `1..` is braille frame
+/// `spin - 1`, so a running cycle never flashes the half-disc. Modern chrome
+/// swaps in bolder symbols.
+fn status_icon_frame(
+    status: crate::api::schema::AgentStatus,
+    style: crate::config::StatusIndicatorStyle,
+    chrome: crate::config::ChromeStyle,
+    spin: u8,
+) -> &'static str {
+    use crate::api::schema::AgentStatus;
+    use crate::config::{ChromeStyle, StatusIndicatorStyle};
+    match (chrome, style, status) {
+        (ChromeStyle::Modern, StatusIndicatorStyle::Symbols, AgentStatus::Working) if spin > 0 => {
+            crate::ui::SPINNER[usize::from(spin - 1) % crate::ui::SPINNER.len()]
+        }
+        (ChromeStyle::Modern, StatusIndicatorStyle::Symbols, AgentStatus::Blocked) => "✕",
+        _ => status_icon(status, style),
+    }
+}
+
 fn status_dot(status: crate::api::schema::AgentStatus) -> &'static str {
     status_icon(status, crate::config::StatusIndicatorStyle::Dots)
 }
@@ -233,13 +256,6 @@ fn status_color(
         AgentStatus::Done => palette.teal,
         AgentStatus::Idle => palette.green,
         AgentStatus::Unknown => palette.overlay0,
-    }
-}
-
-fn panel_contrast_fg(palette: &Palette) -> ratatui::style::Color {
-    match palette.panel_bg {
-        ratatui::style::Color::Reset => palette.surface_dim,
-        color => color,
     }
 }
 

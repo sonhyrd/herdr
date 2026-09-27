@@ -98,7 +98,7 @@ pub(crate) fn render_collapsed_sidebar(
             rect.x.saturating_add(2),
             rect.y,
             rect.width.saturating_sub(2),
-            status_icon(status, config.status_indicators),
+            status_icon_frame(status, config.status_indicators, config.chrome, 0),
             Style::default().fg(status_color(status, palette)),
         );
         hits.workspaces.push(WorkspaceHit {
@@ -111,14 +111,24 @@ pub(crate) fn render_collapsed_sidebar(
     }
 
     if let Some(divider_y) = divider_y {
-        put_text(
-            buffer,
-            workspace_area.x,
-            divider_y,
-            workspace_area.width,
-            &"─".repeat(workspace_area.width as usize),
-            Style::default().fg(palette.surface_dim),
-        );
+        if config.chrome == crate::config::ChromeStyle::Modern {
+            super::put_inset_rule(
+                buffer,
+                workspace_area.x,
+                divider_y,
+                workspace_area.width,
+                Style::default().fg(palette.surface1),
+            );
+        } else {
+            put_text(
+                buffer,
+                workspace_area.x,
+                divider_y,
+                workspace_area.width,
+                &"─".repeat(workspace_area.width as usize),
+                Style::default().fg(palette.surface_dim),
+            );
+        }
     }
 
     let detail_content = Rect::new(
@@ -165,7 +175,12 @@ pub(crate) fn render_collapsed_sidebar(
             rect.x.saturating_add(2),
             rect.y,
             rect.width.saturating_sub(2),
-            status_icon(agent.agent_status, config.status_indicators),
+            status_icon_frame(
+                agent.agent_status,
+                config.status_indicators,
+                config.chrome,
+                0,
+            ),
             Style::default().fg(status_color(agent.agent_status, palette)),
         );
         hits.agents.push((rect, pane_id));
@@ -215,16 +230,30 @@ pub(crate) fn render_sidebar(
         crate::ui::expanded_sidebar_sections(area, state.sidebar_section_split);
     hits.sidebar_section_divider =
         crate::ui::sidebar_section_divider_rect(area, state.sidebar_section_split);
-    put_text(
-        buffer,
-        workspace_area.x,
-        workspace_area.y,
-        workspace_area.width,
-        " spaces",
-        Style::default()
-            .fg(palette.overlay0)
-            .add_modifier(Modifier::BOLD),
-    );
+    let modern = config.chrome == crate::config::ChromeStyle::Modern;
+    if modern {
+        put_text(
+            buffer,
+            workspace_area.x,
+            workspace_area.y,
+            workspace_area.width,
+            " ◆ SPACES",
+            Style::default()
+                .fg(palette.accent)
+                .add_modifier(Modifier::BOLD),
+        );
+    } else {
+        put_text(
+            buffer,
+            workspace_area.x,
+            workspace_area.y,
+            workspace_area.width,
+            " spaces",
+            Style::default()
+                .fg(palette.overlay0)
+                .add_modifier(Modifier::BOLD),
+        );
+    }
 
     let entries = workspace_entries(snapshot, state.collapsed_groups);
     let body = Rect::new(
@@ -325,15 +354,29 @@ pub(crate) fn render_sidebar(
             buffer,
             rect,
             status,
-            config.status_indicators,
+            status_icon_frame(status, config.status_indicators, config.chrome, 0),
             entry,
             rows,
-            workspace.focused,
+            // On the modern accent-tinted cursor fill, secondary grey is
+            // unreadable: draw the cursor row with the current row's bright text.
+            workspace.focused || (modern && selected),
             selected,
             state.selected_workspace_id.is_some(),
             dragged,
             palette,
         );
+        if modern {
+            // The navigation cursor gets the accent-tinted fill; the current
+            // space keeps its classic row fill. Both get the accent bar.
+            if selected {
+                buffer.set_style(rect, Style::default().bg(super::selected_row_fill(palette)));
+            }
+            if let Some(color) =
+                super::row_bar_color(selected || workspace.focused, status, palette)
+            {
+                super::put_row_bar(buffer, rect, color);
+            }
+        }
         let group_toggle = render_parent_group_toggle(
             buffer,
             rect,
@@ -656,7 +699,7 @@ pub(in crate::client::shell) fn render_workspace_rows(
     buffer: &mut Buffer,
     area: Rect,
     status: crate::api::schema::AgentStatus,
-    indicators: crate::config::StatusIndicatorStyle,
+    icon: &'static str,
     entry: &WorkspaceEntry,
     rows: Vec<Vec<crate::ui::ResolvedToken>>,
     focused: bool,
@@ -715,10 +758,7 @@ pub(in crate::client::shell) fn render_workspace_rows(
         });
         let spans = crate::ui::resolved_token_spans(
             row,
-            (
-                status_icon(status, indicators),
-                Style::default().fg(status_color(status, palette)),
-            ),
+            (icon, Style::default().fg(status_color(status, palette))),
             Style::default().fg(status_color(status, palette)),
             workspace_style,
             secondary_style,

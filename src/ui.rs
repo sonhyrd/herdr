@@ -43,7 +43,9 @@ pub(crate) use self::tab_surface::{
     tab_surface_cursor, tab_surface_hyperlinks, TabSurfaceLayout, TabSurfaceTarget, TabSurfaceView,
 };
 pub(crate) use self::text::truncate_end;
-pub(crate) use self::widgets::{centered_popup_rect, modal_stack_areas};
+pub(crate) use self::widgets::{
+    centered_popup_rect, float_frame, modal_stack_areas, panel_contrast_fg, pill, tint, SPINNER,
+};
 
 use crate::app::AppState;
 use crate::terminal::TerminalRuntimeRegistry;

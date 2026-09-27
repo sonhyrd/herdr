@@ -348,7 +348,17 @@ Agent status uses compact colored dots by default. To distinguish blocked, worki
 status_indicators = "symbols"
 ```
 
-The symbols are static, so this option does not enable spinner animation.
+The symbols are static. With the modern chrome and `animations = true`, only the working count on the tab bar's fleet counter spins.
+
+Herdr's own chrome defaults to a modern look: pill-shaped tabs numbered by position with a status glyph, rounded popups with titled borders and key caps, toasts with a countdown, and a status-coloured bar beside each sidebar row. `chrome = "classic"` restores the upstream look, tab bar included. Animations are off by default; `animations = true` slides toasts in, fades popups and sweeps the newly selected tab:
+
+```toml
+[ui]
+chrome = "classic"
+animations = true
+```
+
+Setting `HERDR_REDUCE_MOTION=1` in the environment keeps animation off. If your font draws half-block characters with visible seams, `chrome = "classic"` avoids them.
 
 ### Sidebar row layouts
 

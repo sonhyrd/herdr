@@ -7,10 +7,9 @@ use ratatui::{
 };
 
 use super::scrollbar::{render_pane_scrollbar, should_show_scrollbar};
-#[cfg(test)]
 use super::text::display_width;
 use super::text::truncate_end;
-use super::widgets::panel_contrast_fg;
+use super::widgets::{color_to_rgb, mix_rgb, panel_contrast_fg, relative_luminance};
 use crate::app::state::Palette;
 use crate::app::AppState;
 use crate::layout::PaneInfo;
@@ -493,7 +492,7 @@ fn render_pane_borders(
         let focused = pane_infos
             .iter()
             .any(|info| info.is_focused && line_touches_pane(x, y, info, app.pane_gaps));
-        let symbol = line_cell_symbol(line);
+        let symbol = line_cell_symbol(line, app.chrome);
         if symbol.is_empty() {
             continue;
         }
@@ -666,6 +665,18 @@ fn render_pane_border_titles(
         if start_x >= end_x {
             continue;
         }
+        if app.chrome == crate::config::ChromeStyle::Modern {
+            render_modern_pane_title(
+                buf,
+                start_x,
+                end_x,
+                y,
+                &title,
+                info.is_focused,
+                &app.palette,
+            );
+            continue;
+        }
         let color = if info.is_focused {
             app.palette.accent
         } else {
@@ -685,7 +696,54 @@ fn render_pane_border_titles(
     }
 }
 
-fn line_cell_symbol(line: LineCell) -> &'static str {
+/// Modern pane title on the top border between `start_x` and `end_x`: the
+/// focused pane's as an accent `▐ label ▌` pill, the others as `╴label╶`.
+fn render_modern_pane_title(
+    buf: &mut Buffer,
+    start_x: u16,
+    end_x: u16,
+    y: u16,
+    title: &str,
+    focused: bool,
+    palette: &Palette,
+) {
+    let label = title.trim();
+    let max = end_x.saturating_sub(start_x);
+    if focused {
+        // ▐ label ▌ : caps plus a space of padding each side.
+        let label = truncate_end(label, usize::from(max.saturating_sub(4)));
+        let width = (display_width(&label) as u16).saturating_add(4).min(max);
+        super::widgets::pill(
+            buf,
+            Rect::new(start_x, y, width, 1),
+            &label,
+            palette.accent,
+            panel_contrast_fg(palette),
+            true,
+        );
+    } else {
+        let label = truncate_end(label, usize::from(max.saturating_sub(2)));
+        buf.set_stringn(
+            start_x,
+            y,
+            format!("╴{label}╶"),
+            usize::from(max),
+            Style::default().fg(palette.overlay0),
+        );
+    }
+}
+
+fn line_cell_symbol(line: LineCell, chrome: crate::config::ChromeStyle) -> &'static str {
+    // Only plain corners round; tees and crosses stay square so junctions join.
+    if chrome == crate::config::ChromeStyle::Modern {
+        match (line.up, line.down, line.left, line.right) {
+            (false, true, false, true) => return "╭",
+            (false, true, true, false) => return "╮",
+            (true, false, false, true) => return "╰",
+            (true, false, true, false) => return "╯",
+            _ => {}
+        }
+    }
     match (line.up, line.down, line.left, line.right) {
         (true, true, true, true) => "┼",
         (true, true, true, false) => "┤",
@@ -729,8 +787,6 @@ pub(crate) fn render_selection_highlight<P: PartialEq>(
         }
     }
 }
-
-type Rgb = (u8, u8, u8);
 
 fn automatic_selection_style(
     p: &Palette,
@@ -791,53 +847,6 @@ fn selection_fg_for_bg(bg: Color, p: &Palette) -> Color {
             }
         })
         .unwrap_or_else(|| panel_contrast_fg(p))
-}
-
-fn mix_rgb(base: Rgb, target: Rgb, amount: f32) -> Rgb {
-    fn channel(base: u8, target: u8, amount: f32) -> u8 {
-        (f32::from(base) + (f32::from(target) - f32::from(base)) * amount).round() as u8
-    }
-    (
-        channel(base.0, target.0, amount),
-        channel(base.1, target.1, amount),
-        channel(base.2, target.2, amount),
-    )
-}
-
-fn relative_luminance(color: Rgb) -> f32 {
-    fn channel(value: u8) -> f32 {
-        let value = f32::from(value) / 255.0;
-        if value <= 0.03928 {
-            value / 12.92
-        } else {
-            ((value + 0.055) / 1.055).powf(2.4)
-        }
-    }
-    0.2126 * channel(color.0) + 0.7152 * channel(color.1) + 0.0722 * channel(color.2)
-}
-
-fn color_to_rgb(color: Color) -> Option<Rgb> {
-    match color {
-        Color::Reset => None,
-        Color::Black => Some((0, 0, 0)),
-        Color::Red => Some((128, 0, 0)),
-        Color::Green => Some((0, 128, 0)),
-        Color::Yellow => Some((128, 128, 0)),
-        Color::Blue => Some((0, 0, 128)),
-        Color::Magenta => Some((128, 0, 128)),
-        Color::Cyan => Some((0, 128, 128)),
-        Color::Gray => Some((192, 192, 192)),
-        Color::DarkGray => Some((128, 128, 128)),
-        Color::LightRed => Some((255, 0, 0)),
-        Color::LightGreen => Some((0, 255, 0)),
-        Color::LightYellow => Some((255, 255, 0)),
-        Color::LightBlue => Some((0, 0, 255)),
-        Color::LightMagenta => Some((255, 0, 255)),
-        Color::LightCyan => Some((0, 255, 255)),
-        Color::White => Some((255, 255, 255)),
-        Color::Rgb(r, g, b) => Some((r, g, b)),
-        Color::Indexed(_) => None,
-    }
 }
 
 #[cfg(test)]
@@ -1171,6 +1180,69 @@ mod tests {
         assert_eq!(buffer[(2, 2)].style().fg, Some(app.palette.accent));
         assert_eq!(buffer[(2, 1)].symbol(), "│");
         assert_eq!(buffer[(2, 1)].style().fg, Some(app.palette.accent));
+    }
+
+    #[test]
+    fn modern_pane_titles_pill_the_focused_pane_and_tick_the_others() {
+        let palette = AppState::test_new().palette;
+        let row = |buffer: &Buffer| -> String {
+            buffer.content.iter().map(|cell| cell.symbol()).collect()
+        };
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 20, 1));
+        buffer.set_string(0, 0, "╭──────────────────╮", Style::default());
+        render_modern_pane_title(&mut buffer, 1, 19, 0, " claude ", true, &palette);
+        assert_eq!(row(&buffer), "╭▐ claude ▌────────╮");
+        assert_eq!(buffer[(3, 0)].fg, panel_contrast_fg(&palette));
+        assert_eq!(buffer[(3, 0)].bg, palette.accent);
+        assert_eq!(buffer[(1, 0)].fg, palette.accent);
+
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 20, 1));
+        buffer.set_string(0, 0, "╭──────────────────╮", Style::default());
+        render_modern_pane_title(
+            &mut buffer,
+            1,
+            19,
+            0,
+            "a-very-long-pane-title",
+            false,
+            &palette,
+        );
+        let text = row(&buffer);
+        assert!(text.starts_with("╭╴a-very-long-pan…╶"), "{text}");
+        assert_eq!(buffer[(2, 0)].fg, palette.overlay0);
+    }
+
+    #[test]
+    fn modern_chrome_rounds_only_plain_corners() {
+        use crate::config::ChromeStyle::{Classic, Modern};
+        let cell = |up, down, left, right| LineCell {
+            up,
+            down,
+            left,
+            right,
+        };
+        assert_eq!(
+            line_cell_symbol(cell(false, true, false, true), Modern),
+            "╭"
+        );
+        assert_eq!(
+            line_cell_symbol(cell(false, true, true, false), Modern),
+            "╮"
+        );
+        assert_eq!(
+            line_cell_symbol(cell(true, false, false, true), Modern),
+            "╰"
+        );
+        assert_eq!(
+            line_cell_symbol(cell(true, false, true, false), Modern),
+            "╯"
+        );
+        assert_eq!(
+            line_cell_symbol(cell(false, true, false, true), Classic),
+            "┌"
+        );
+        assert_eq!(line_cell_symbol(cell(true, true, true, true), Modern), "┼");
+        assert_eq!(line_cell_symbol(cell(false, true, true, true), Modern), "┬");
     }
 
     #[test]

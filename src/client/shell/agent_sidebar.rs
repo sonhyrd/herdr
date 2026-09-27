@@ -97,32 +97,56 @@ pub(super) fn render_agent_panel_header(
     if area.height == 0 {
         return false;
     }
-    put_text(
-        buffer,
-        area.x,
-        area.y,
-        area.width,
-        &"─".repeat(area.width as usize),
-        Style::default().fg(config.palette.surface_dim),
-    );
+    let modern = config.chrome == crate::config::ChromeStyle::Modern;
+    if modern {
+        super::render::put_inset_rule(
+            buffer,
+            area.x,
+            area.y,
+            area.width,
+            Style::default().fg(config.palette.surface1),
+        );
+    } else {
+        put_text(
+            buffer,
+            area.x,
+            area.y,
+            area.width,
+            &"─".repeat(area.width as usize),
+            Style::default().fg(config.palette.surface_dim),
+        );
+    }
     if area.height < 2 {
         return false;
     }
-    put_text(
-        buffer,
-        area.x,
-        area.y + 1,
-        area.width,
-        " agents",
-        Style::default()
-            .fg(config.palette.overlay0)
-            .add_modifier(Modifier::BOLD),
-    );
+    if modern {
+        put_text(
+            buffer,
+            area.x,
+            area.y + 1,
+            area.width,
+            " ◆ AGENTS",
+            Style::default()
+                .fg(config.palette.accent)
+                .add_modifier(Modifier::BOLD),
+        );
+    } else {
+        put_text(
+            buffer,
+            area.x,
+            area.y + 1,
+            area.width,
+            " agents",
+            Style::default()
+                .fg(config.palette.overlay0)
+                .add_modifier(Modifier::BOLD),
+        );
+    }
     let sort_label = agent_view_label.unwrap_or(match config.agent_panel_sort {
         crate::config::AgentPanelSortConfig::Spaces => "grouped",
         crate::config::AgentPanelSortConfig::Priority => "priority",
     });
-    let sort_width = display_width(sort_label).min(area.width as usize) as u16;
+    let sort_width = display_width(sort_label).min(area.width);
     let sort_rect = Rect::new(
         area.right().saturating_sub(sort_width),
         area.y + 1,
@@ -325,10 +349,11 @@ pub(super) fn render_agent_row(
     config: &ClientShellConfig,
 ) {
     let palette = &config.palette;
-    let row_style = if row.focused {
-        Style::default().bg(palette.active_row_bg)
-    } else {
-        Style::default()
+    let modern = config.chrome == crate::config::ChromeStyle::Modern;
+    let row_style = match (row.focused, modern) {
+        (true, true) => Style::default().bg(super::render::selected_row_fill(palette)),
+        (true, false) => Style::default().bg(palette.active_row_bg),
+        (false, _) => Style::default(),
     };
     let name_style = if row.focused {
         Style::default()
@@ -340,9 +365,14 @@ pub(super) fn render_agent_row(
             .add_modifier(Modifier::BOLD)
     };
     let status_style = Style::default().fg(status_color(row.status, palette));
-    let secondary = Style::default().fg(palette.overlay0);
+    // The modern selection fill is accent-tinted: secondary grey on it is unreadable.
+    let secondary = Style::default().fg(if row.focused && modern {
+        palette.text
+    } else {
+        palette.overlay0
+    });
     let icon = (
-        status_icon(row.status, config.status_indicators),
+        status_icon_frame(row.status, config.status_indicators, config.chrome, 0),
         Style::default().fg(status_color(row.status, palette)),
     );
     let rows = if row.rows.is_empty() {
@@ -371,19 +401,14 @@ pub(super) fn render_agent_row(
             buffer,
         );
     }
-}
-
-fn put_text(buffer: &mut Buffer, x: u16, y: u16, width: u16, text: &str, style: Style) {
-    for (offset, character) in text.chars().take(width as usize).enumerate() {
-        if let Some(cell) = buffer.cell_mut((x + offset as u16, y)) {
-            cell.set_char(character).set_style(style);
+    if modern {
+        if let Some(color) = super::render::row_bar_color(row.focused, row.status, palette) {
+            super::render::put_row_bar(buffer, rect, color);
         }
     }
 }
 
-fn display_width(text: &str) -> usize {
-    unicode_width::UnicodeWidthStr::width(text)
-}
+use super::render::{display_width, put_text};
 
 fn sidebar_status_text(status: crate::api::schema::AgentStatus) -> &'static str {
     use crate::api::schema::AgentStatus;

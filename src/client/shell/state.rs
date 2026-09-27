@@ -25,6 +25,8 @@ pub(crate) struct ClientShellConfig {
     pub(super) agents: crate::config::AgentsSidebarConfig,
     pub(super) agent_panel_sort: crate::config::AgentPanelSortConfig,
     pub(super) status_indicators: crate::config::StatusIndicatorStyle,
+    pub(super) chrome: crate::config::ChromeStyle,
+    pub(super) animations: bool,
     pub(super) sound_enabled: bool,
     pub(super) toast_delivery: crate::config::ToastDelivery,
     pub(super) toast_delay_seconds: u64,
@@ -83,6 +85,8 @@ pub(super) enum ClientMobileTarget {
 
 #[derive(Default)]
 pub(super) struct ShellHitMap {
+    /// Outer rect of the open overlay or menu (motion clips its fade here).
+    pub(super) overlay_area: Rect,
     pub(super) machines: Vec<MachineHit>,
     pub(super) workspaces: Vec<WorkspaceHit>,
     pub(super) workspace_body: Rect,
@@ -882,6 +886,7 @@ pub(crate) struct ClientShellState {
     pub(super) last_composed_size: Option<(u16, u16)>,
     pub(super) last_composed_at: Option<std::time::Instant>,
     pub(super) selection_repaint_deadline: Option<std::time::Instant>,
+    pub(super) fx: super::fx::ShellFx,
     pub(super) hits: ShellHitMap,
     pub(super) endpoints: Vec<ClientShellEndpoint>,
     pub(super) active_endpoint_id: ClientEndpointId,
@@ -1047,6 +1052,8 @@ impl ClientShellState {
             last_composed_size: None,
             last_composed_at: None,
             selection_repaint_deadline: None,
+            // Tests compose deterministic frames: motion stays off under cfg(test).
+            fx: super::fx::ShellFx::new(cfg!(test) || super::fx::reduce_motion_from_env()),
             hits: ShellHitMap::default(),
             endpoints: vec![local_endpoint()],
             active_endpoint_id: ClientEndpointId::Local,
@@ -1395,7 +1402,8 @@ impl ClientShellState {
                             || left.label != right.label
                             || left.zoomed != right.zoomed
                     })
-                || render::tab_bar_status_width(current) != render::tab_bar_status_width(&snapshot)
+                || render::tab_bar_status_width(current, &self.config)
+                    != render::tab_bar_status_width(&snapshot, &self.config)
         });
         if self
             .snapshot
@@ -1858,9 +1866,14 @@ impl ClientShellState {
         self.selection_autoscroll_deadline
             .into_iter()
             .chain(self.selection_repaint_deadline)
+            .chain(self.fx.deadline(now))
             .min()
             .map(|deadline| deadline.saturating_duration_since(now).min(default))
             .unwrap_or(default)
+    }
+
+    pub(crate) fn tick_fx(&mut self, now: std::time::Instant) -> bool {
+        self.fx.tick(now)
     }
 
     pub(crate) fn invalidate_pane_surface(&mut self) {

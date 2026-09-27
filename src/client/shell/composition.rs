@@ -77,6 +77,7 @@ impl ClientShellState {
             reveal_navigation_workspace: &mut self.reveal_navigation_workspace,
             dragged_workspace_id: None,
             workspace_drop_indicator_row: None,
+            spin: self.fx.spin(),
         };
         if let Some(snapshot) = local_snapshot {
             render::render_sidebar(
@@ -134,6 +135,7 @@ impl ClientShellState {
             false,
             &self.config.keybinds,
             &self.config.palette,
+            self.config.chrome,
         );
         if let Some(notice) = &self.visible_endpoint_notice {
             self.hits.notification_toast = endpoint_notices::render_notice(
@@ -142,6 +144,7 @@ impl ClientShellState {
                 notice,
                 1,
                 &self.config.palette,
+                self.config.chrome,
             );
         }
         FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, None, &[])
@@ -152,7 +155,9 @@ impl ClientShellState {
         cols: u16,
         rows: u16,
     ) -> Option<crate::client::frame_output::ComposedFrame> {
-        self.last_composed_at = Some(std::time::Instant::now());
+        let now = std::time::Instant::now();
+        self.last_composed_at = Some(now);
+        self.fx.set_enabled(self.config.animations);
         self.selection_repaint_deadline = None;
         if self.last_composed_size != Some((cols, rows)) && self.mode == ClientShellMode::Navigate {
             self.reveal_navigation_workspace = true;
@@ -233,6 +238,7 @@ impl ClientShellState {
                 reveal_navigation_workspace: &mut self.reveal_navigation_workspace,
                 dragged_workspace_id,
                 workspace_drop_indicator_row,
+                spin: self.fx.spin(),
             },
         );
         self.hits.panes = surface
@@ -330,6 +336,7 @@ impl ClientShellState {
                 snapshot.update_available.is_some(),
                 &self.config.keybinds,
                 &self.config.palette,
+                self.config.chrome,
             )
         };
         if mode_bar == Some(layout.tab_bar) {
@@ -459,6 +466,14 @@ impl ClientShellState {
             .find(|endpoint| endpoint.endpoint_id == self.active_endpoint_id)
             .filter(|endpoint| endpoint.status != ClientEndpointStatus::Online)
             .map(|endpoint| (endpoint.label.clone(), endpoint.status));
+        // Bottom toasts sit above the mode bar, which is restored over the
+        // frame afterwards and would otherwise hide their bottom edge.
+        let toast_area = Rect::new(
+            0,
+            0,
+            cols,
+            mode_bar.map_or(rows, |bar| if bar.y > 0 { bar.y } else { rows }),
+        );
         if has_config_diagnostic
             || active_lifecycle.is_some()
             || self.visible_endpoint_notice.is_some()
@@ -495,10 +510,11 @@ impl ClientShellState {
                 self.hits.notification_toast = if layout.mobile_header.is_empty() {
                     endpoint_notices::render_notice(
                         &mut composed,
-                        Rect::new(0, 0, cols, rows),
+                        toast_area,
                         notice,
                         u16::from(has_config_diagnostic) + lifecycle_offset,
                         &self.config.palette,
+                        self.config.chrome,
                     )
                 } else {
                     endpoint_notices::render_mobile_banner(
@@ -513,11 +529,13 @@ impl ClientShellState {
                 self.hits.notification_toast = if layout.mobile_header.is_empty() {
                     notifications::render_visible_notification(
                         &mut composed,
-                        Rect::new(0, 0, cols, rows),
+                        toast_area,
                         notification,
                         self.config.toast_position,
                         u16::from(has_config_diagnostic) + lifecycle_offset,
                         &self.config.palette,
+                        self.config.chrome,
+                        now,
                     )
                 } else {
                     notifications::render_mobile_notification_banner(
@@ -569,6 +587,13 @@ impl ClientShellState {
                 let mut composed = frame.to_ratatui_buffer()?;
                 let block = ratatui::widgets::Block::default()
                     .borders(ratatui::widgets::Borders::ALL)
+                    .border_type(
+                        if self.config.chrome == crate::config::ChromeStyle::Modern {
+                            ratatui::widgets::BorderType::Rounded
+                        } else {
+                            ratatui::widgets::BorderType::Plain
+                        },
+                    )
                     .border_style(ratatui::style::Style::default().fg(self.config.palette.accent))
                     .title(popup.title.clone())
                     .style(ratatui::style::Style::default().bg(self.config.palette.panel_bg));
@@ -645,9 +670,14 @@ impl ClientShellState {
         if let Some(overlay) = self.overlay.as_ref() {
             let mut composed = frame.to_ratatui_buffer()?;
             let cursor = if let ClientShellOverlay::ContextMenu(menu) = overlay {
-                let rendered =
-                    render::render_context_menu(&mut composed, menu, &self.config.palette)?;
+                let rendered = render::render_context_menu(
+                    &mut composed,
+                    menu,
+                    &self.config.palette,
+                    self.config.chrome == crate::config::ChromeStyle::Modern,
+                )?;
                 occlusion.cover(rendered.area);
+                self.hits.overlay_area = rendered.area;
                 self.hits.context_menu_rows = rendered.menu_rows;
                 None
             } else if let ClientShellOverlay::GlobalMenu(menu) = overlay {
@@ -657,8 +687,10 @@ impl ClientShellState {
                     menu,
                     snapshot,
                     &self.config.palette,
+                    self.config.chrome == crate::config::ChromeStyle::Modern,
                 )?;
                 occlusion.cover(rendered.area);
+                self.hits.overlay_area = rendered.area;
                 self.hits.global_menu_rows = rendered.menu_rows;
                 None
             } else {
@@ -670,8 +702,10 @@ impl ClientShellState {
                     &self.active_endpoint_id,
                     &self.config.keybinds,
                     &self.config.palette,
+                    self.config.chrome == crate::config::ChromeStyle::Modern,
                 )?;
                 occlusion.cover(rendered.area);
+                self.hits.overlay_area = rendered.area;
                 self.hits.overlay_primary = rendered.primary;
                 self.hits.overlay_clear = rendered.clear;
                 self.hits.overlay_cancel = rendered.cancel;
@@ -719,6 +753,42 @@ impl ClientShellState {
             self.hits.panes.clear();
             self.hits.pane_splits.clear();
             self.hits.popup = None;
+        }
+        // Only the tab bar's fleet counter spins; tabs and sidebar rows stay still.
+        let working_visible = self.config.chrome == crate::config::ChromeStyle::Modern
+            && !layout.tab_bar.is_empty()
+            && snapshot
+                .workspaces
+                .iter()
+                .any(|w| w.agent_status == crate::api::schema::AgentStatus::Working);
+        let active_tab = snapshot
+            .tabs
+            .iter()
+            .find(|tab| {
+                tab.focused
+                    && Some(tab.workspace_id.as_str()) == snapshot.focused_workspace_id.as_deref()
+            })
+            .map(|tab| tab.tab_id.as_str());
+        self.fx.observe(
+            fx::FxFrame {
+                hits: &self.hits,
+                overlay: self.overlay.as_ref(),
+                toast: self
+                    .visible_notification
+                    .as_ref()
+                    .filter(|_| !self.hits.notification_toast.is_empty())
+                    .map(|notification| notification.deadline),
+                active_tab,
+                working_visible,
+                palette: &self.config.palette,
+            },
+            now,
+        );
+        if self.fx.running() {
+            let cursor = frame.cursor.clone();
+            let mut composed = frame.to_ratatui_buffer()?;
+            self.fx.process(&mut composed, now);
+            frame.replace_from_ratatui_buffer_preserving_effects(&composed, cursor);
         }
         let graphics = self.compose_graphics(layout, &occlusion);
         Some(crate::client::frame_output::ComposedFrame { frame, graphics })

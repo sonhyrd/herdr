@@ -41,6 +41,7 @@ pub(crate) fn render_client_overlay(
     active_endpoint_id: &ClientEndpointId,
     k: &LiveKeybindConfig,
     p: &Palette,
+    modern: bool,
 ) -> Option<OverlayRender> {
     if !matches!(
         o,
@@ -56,28 +57,34 @@ pub(crate) fn render_client_overlay(
         }
     }
     match o {
-        ClientShellOverlay::Onboarding => render_onboarding_overlay(b, p),
-        ClientShellOverlay::ProductAnnouncement(v) => render_product_announcement_overlay(b, v, p),
+        ClientShellOverlay::Onboarding => render_onboarding_overlay(b, p, modern),
+        ClientShellOverlay::ProductAnnouncement(v) => {
+            render_product_announcement_overlay(b, v, p, modern)
+        }
         ClientShellOverlay::ReleaseNotes(v) => {
-            render_release_notes_overlay(b, v, &s.update_install_command, p)
+            render_release_notes_overlay(b, v, &s.update_install_command, p, modern)
         }
-        ClientShellOverlay::Rename(v) => render_rename_overlay(b, v, p),
-        ClientShellOverlay::ConfirmClose(v) => render_confirm_close_overlay(b, v, p),
-        ClientShellOverlay::Help(v) => render_help_overlay(b, v, k, p),
+        ClientShellOverlay::Rename(v) => render_rename_overlay(b, v, p, modern),
+        ClientShellOverlay::ConfirmClose(v) => render_confirm_close_overlay(b, v, p, modern),
+        ClientShellOverlay::Help(v) => render_help_overlay(b, v, k, p, modern),
         ClientShellOverlay::Navigator(v) => {
-            render_navigator_overlay(b, v, endpoints, active_endpoint_id, p)
+            render_navigator_overlay(b, v, endpoints, active_endpoint_id, p, modern)
         }
-        ClientShellOverlay::Settings(v) => {
-            settings_overlay::render_settings_overlay(b, v, s.integration_updates_available, p)
-        }
+        ClientShellOverlay::Settings(v) => settings_overlay::render_settings_overlay(
+            b,
+            v,
+            s.integration_updates_available,
+            p,
+            modern,
+        ),
         ClientShellOverlay::WorktreeCreate(v) => {
-            worktree_overlays::render_worktree_create_overlay(b, v, p)
+            worktree_overlays::render_worktree_create_overlay(b, v, p, modern)
         }
         ClientShellOverlay::WorktreeOpen(v) => {
-            worktree_overlays::render_worktree_open_overlay(b, v, p)
+            worktree_overlays::render_worktree_open_overlay(b, v, p, modern)
         }
         ClientShellOverlay::WorktreeRemove(v) => {
-            worktree_overlays::render_worktree_remove_overlay(b, v, p)
+            worktree_overlays::render_worktree_remove_overlay(b, v, p, modern)
         }
         ClientShellOverlay::ContextMenu(_) | ClientShellOverlay::GlobalMenu(_) => None,
     }
@@ -89,6 +96,7 @@ pub(crate) fn render_global_menu(
     menu: &ClientGlobalMenuOverlay,
     snapshot: &ClientShellSnapshot,
     palette: &Palette,
+    modern: bool,
 ) -> Option<OverlayRender> {
     let items = super::super::global_menu::global_menu_items(snapshot);
     let screen = buffer.area;
@@ -113,7 +121,7 @@ pub(crate) fn render_global_menu(
         .min(screen.right().saturating_sub(width));
     let y = launcher.y.saturating_sub(height).max(screen.y);
     let rect = Rect::new(x, y, width, height);
-    let inner = panel(buffer, rect, palette.accent, palette.panel_bg)?;
+    let inner = panel(buffer, rect, palette.accent, palette.panel_bg, modern)?;
     let mut rows = Vec::new();
     for (index, (label, action)) in items.iter().enumerate() {
         let row_y = inner.y.saturating_add(index as u16);
@@ -166,6 +174,7 @@ pub(crate) fn render_context_menu(
     buffer: &mut Buffer,
     menu: &ClientContextMenuOverlay,
     palette: &Palette,
+    modern: bool,
 ) -> Option<OverlayRender> {
     let items = menu.items();
     let screen = buffer.area;
@@ -190,7 +199,7 @@ pub(crate) fn render_context_menu(
             .saturating_add(screen.height.saturating_sub(height)),
     );
     let rect = Rect::new(x, y, width, height);
-    let inner = panel(buffer, rect, palette.accent, palette.panel_bg)?;
+    let inner = panel(buffer, rect, palette.accent, palette.panel_bg, modern)?;
     let mut rows = Vec::new();
     for (index, item) in items.iter().enumerate() {
         let row_y = inner.y.saturating_add(index as u16);
@@ -223,9 +232,13 @@ fn panel(
     a: Rect,
     c: ratatui::style::Color,
     bg: ratatui::style::Color,
+    modern: bool,
 ) -> Option<Rect> {
     if a.width < 2 || a.height < 2 {
         return None;
+    }
+    if modern {
+        return Some(crate::ui::float_frame(b, a, None, c, bg));
     }
     let background = Style::default().bg(bg).remove_modifier(Modifier::DIM);
     let border = Style::default().fg(c).bg(bg).remove_modifier(Modifier::DIM);
@@ -261,6 +274,70 @@ fn panel(
     }
     Some(Rect::new(a.x + 1, a.y + 1, a.width - 2, a.height - 2))
 }
+/// `panel`, with the title on the top border in modern chrome.
+fn titled_panel(
+    b: &mut Buffer,
+    a: Rect,
+    c: ratatui::style::Color,
+    bg: ratatui::style::Color,
+    modern: bool,
+    title: &str,
+) -> Option<Rect> {
+    if modern && a.width >= 2 && a.height >= 2 {
+        return Some(crate::ui::float_frame(b, a, Some(title), c, bg));
+    }
+    panel(b, a, c, bg, modern)
+}
+/// A key drawn as a raised cap: ` ctrl+b ` on surface1.
+fn key_cap_style(p: &Palette) -> Style {
+    Style::default()
+        .fg(p.text)
+        .bg(p.surface1)
+        .add_modifier(Modifier::BOLD)
+}
+/// Modern footer: each key as a cap followed by what it does.
+fn key_hints(b: &mut Buffer, r: Rect, hints: &[(&str, &str)], p: &Palette) {
+    let base = Style::default().fg(p.overlay1).bg(p.panel_bg);
+    b.set_style(r, base);
+    let right = r.right();
+    let mut x = r.x.saturating_add(1);
+    for (index, (key, desc)) in hints.iter().enumerate() {
+        if index > 0 {
+            x = put_segment(b, x, r.y, right, "  ", base);
+        }
+        x = put_segment(b, x, r.y, right, &format!(" {key} "), key_cap_style(p));
+        x = put_segment(b, x, r.y, right, &format!(" {desc}"), base);
+    }
+}
+/// Modern section heading: `▍ TITLE ───────` in the accent.
+fn section_heading(b: &mut Buffer, x: u16, y: u16, width: u16, title: &str, p: &Palette) {
+    let bg = Style::default().bg(p.panel_bg);
+    let right = x.saturating_add(width);
+    let mut cursor = put_segment(b, x, y, right, "▍ ", bg.fg(p.accent));
+    cursor = put_segment(
+        b,
+        cursor,
+        y,
+        right,
+        &title.to_uppercase(),
+        bg.fg(p.accent).add_modifier(Modifier::BOLD),
+    );
+    let rule = usize::from(right.saturating_sub(cursor).saturating_sub(2));
+    put_segment(
+        b,
+        cursor.saturating_add(1),
+        y,
+        right,
+        &"─".repeat(rule),
+        bg.fg(p.surface1),
+    );
+}
+/// Modern input well: the row inset one cell and filled with surface0.
+fn input_well(b: &mut Buffer, r: Rect, p: &Palette) -> Style {
+    let style = Style::default().bg(p.surface0);
+    b.set_style(r, style);
+    style
+}
 fn popup(a: Rect, w: u16, h: u16) -> Option<Rect> {
     let w = w.min(a.width.saturating_sub(4));
     let h = h.min(a.height.saturating_sub(2));
@@ -274,7 +351,19 @@ fn popup(a: Rect, w: u16, h: u16) -> Option<Rect> {
         h,
     ))
 }
-fn button(b: &mut Buffer, r: Rect, t: &str, s: Style) {
+fn button(b: &mut Buffer, r: Rect, t: &str, s: Style, modern: bool) {
+    if modern && r.width >= 3 {
+        // The label's own edge spaces become the pill caps: same width, same hit rect.
+        crate::ui::pill(
+            b,
+            r,
+            t.trim(),
+            s.bg.unwrap_or(ratatui::style::Color::Reset),
+            s.fg.unwrap_or(ratatui::style::Color::Reset),
+            s.add_modifier.contains(Modifier::BOLD),
+        );
+        return;
+    }
     b.set_style(r, s);
     let w = display_width(t).min(r.width);
     put_text(b, r.x + (r.width - w) / 2, r.y, w, t, s)
@@ -295,24 +384,19 @@ fn row(i: Rect, ws: &[u16], gap: u16, off: u16) -> Vec<Rect> {
         })
         .collect()
 }
-fn contrast(p: &Palette) -> ratatui::style::Color {
-    match p.panel_bg {
-        ratatui::style::Color::Reset => p.surface_dim,
-        c => c,
-    }
-}
 fn render_release_notes_overlay(
     b: &mut Buffer,
     notes: &crate::app::state::ReleaseNotesState,
     install_command: &str,
     p: &Palette,
+    modern: bool,
 ) -> Option<OverlayRender> {
     let outer = popup(
         b.area,
         crate::ui::RELEASE_NOTES_MODAL_SIZE.0,
         crate::ui::RELEASE_NOTES_MODAL_SIZE.1,
     )?;
-    let inner = panel(b, outer, p.accent, p.panel_bg)?;
+    let inner = panel(b, outer, p.accent, p.panel_bg, modern)?;
     if inner.height < 8 || inner.width < 20 {
         return Some(OverlayRender {
             area: outer,
@@ -367,10 +451,11 @@ fn render_release_notes_overlay(
         close,
         " esc close ",
         Style::default()
-            .fg(contrast(p))
+            .fg(panel_contrast_fg(p))
             .bg(p.accent)
             .add_modifier(Modifier::BOLD)
             .remove_modifier(Modifier::DIM),
+        modern,
     );
 
     let body = stack.content;
@@ -421,13 +506,14 @@ fn render_product_announcement_overlay(
     b: &mut Buffer,
     announcement: &crate::app::state::ProductAnnouncementState,
     p: &Palette,
+    modern: bool,
 ) -> Option<OverlayRender> {
     let outer = popup(
         b.area,
         crate::ui::PRODUCT_ANNOUNCEMENT_MODAL_SIZE.0,
         crate::ui::PRODUCT_ANNOUNCEMENT_MODAL_SIZE.1,
     )?;
-    let inner = panel(b, outer, p.accent, p.panel_bg)?;
+    let inner = panel(b, outer, p.accent, p.panel_bg, modern)?;
     if inner.height < 8 || inner.width < 20 {
         return Some(OverlayRender {
             area: outer,
@@ -483,10 +569,11 @@ fn render_product_announcement_overlay(
         close,
         " esc close ",
         Style::default()
-            .fg(contrast(p))
+            .fg(panel_contrast_fg(p))
             .bg(p.accent)
             .add_modifier(Modifier::BOLD)
             .remove_modifier(Modifier::DIM),
+        modern,
     );
 
     let body = stack.content;
@@ -533,9 +620,9 @@ fn render_product_announcement_overlay(
     })
 }
 
-fn render_onboarding_overlay(b: &mut Buffer, p: &Palette) -> Option<OverlayRender> {
+fn render_onboarding_overlay(b: &mut Buffer, p: &Palette, modern: bool) -> Option<OverlayRender> {
     let outer = popup(b.area, 64, 16)?;
-    let inner = panel(b, outer, p.accent, p.panel_bg)?;
+    let inner = panel(b, outer, p.accent, p.panel_bg, modern)?;
     if inner.height < 11 {
         return Some(OverlayRender {
             area: outer,
@@ -615,10 +702,11 @@ fn render_onboarding_overlay(b: &mut Buffer, p: &Palette) -> Option<OverlayRende
         primary,
         " ↵ continue ",
         Style::default()
-            .fg(contrast(p))
+            .fg(panel_contrast_fg(p))
             .bg(p.accent)
             .add_modifier(Modifier::BOLD)
             .remove_modifier(Modifier::DIM),
+        modern,
     );
     Some(OverlayRender {
         area: outer,
@@ -631,9 +719,10 @@ fn render_rename_overlay(
     b: &mut Buffer,
     v: &ClientRenameOverlay,
     p: &Palette,
+    modern: bool,
 ) -> Option<OverlayRender> {
     let q = popup(b.area, 56, 7)?;
-    let i = panel(b, q, p.accent, p.panel_bg)?;
+    let i = panel(b, q, p.accent, p.panel_bg, modern)?;
     put_text(
         b,
         i.x,
@@ -662,16 +751,17 @@ fn render_rename_overlay(
         *save,
         " ↵ save ",
         Style::default()
-            .fg(contrast(p))
+            .fg(panel_contrast_fg(p))
             .bg(p.accent)
             .add_modifier(Modifier::BOLD),
+        modern,
     );
     let n = Style::default()
         .fg(p.text)
         .bg(p.surface0)
         .add_modifier(Modifier::BOLD);
-    button(b, *clear, " ^c clear ", n);
-    button(b, *cancel, " esc cancel ", n);
+    button(b, *clear, " ^c clear ", n, modern);
+    button(b, *cancel, " esc cancel ", n, modern);
     Some(OverlayRender {
         area: q,
         primary: *save,
@@ -693,6 +783,7 @@ fn render_navigator_overlay(
     endpoints: &[ClientShellEndpoint],
     active_endpoint_id: &ClientEndpointId,
     p: &Palette,
+    modern: bool,
 ) -> Option<OverlayRender> {
     let a = b.area;
     let width = a.width.saturating_sub(4).min(116);
@@ -707,15 +798,17 @@ fn render_navigator_overlay(
         height,
     )
     .intersection(a);
-    let i = panel(b, q, p.accent, p.panel_bg)?;
-    put_text(
-        b,
-        q.x + 2,
-        q.y,
-        q.width.saturating_sub(4),
-        " Go to ",
-        Style::default().fg(p.accent).bg(p.panel_bg),
-    );
+    let i = titled_panel(b, q, p.accent, p.panel_bg, modern, "Go to")?;
+    if !modern {
+        put_text(
+            b,
+            q.x + 2,
+            q.y,
+            q.width.saturating_sub(4),
+            " Go to ",
+            Style::default().fg(p.accent).bg(p.panel_bg),
+        );
+    }
     let rows = super::aggregate_navigation::navigator_rows(endpoints, active_endpoint_id, n);
     let search = if n.search_focused {
         " / ".to_owned()
@@ -746,15 +839,23 @@ fn render_navigator_overlay(
             "terminals"
         }
     );
+    let search_width = i.width.saturating_sub(display_width(&count) + 1);
+    let field_bg = if modern {
+        input_well(b, Rect::new(i.x, i.y, search_width, 1), p)
+            .bg
+            .unwrap_or(p.panel_bg)
+    } else {
+        p.panel_bg
+    };
     put_text(
         b,
         i.x,
         i.y,
-        i.width.saturating_sub(display_width(&count) + 1),
+        search_width,
         &search,
         Style::default()
             .fg(if n.search_focused { p.text } else { p.overlay0 })
-            .bg(p.panel_bg),
+            .bg(field_bg),
     );
     let cursor = if n.search_focused {
         text_editor::render(
@@ -766,7 +867,7 @@ fn render_navigator_overlay(
                 1,
             ),
             &n.query,
-            Style::default().fg(p.text).bg(p.panel_bg),
+            Style::default().fg(p.text).bg(field_bg),
         )
     } else {
         None
@@ -778,14 +879,24 @@ fn render_navigator_overlay(
         &count,
         Style::default().fg(p.overlay0).bg(p.panel_bg),
     );
-    put_text(
-        b,
-        i.x,
-        i.y + 1,
-        i.width,
-        &"─".repeat(i.width as usize),
-        Style::default().fg(p.surface1).bg(p.panel_bg),
-    );
+    if modern {
+        super::put_inset_rule(
+            b,
+            i.x,
+            i.y + 1,
+            i.width,
+            Style::default().fg(p.surface1).bg(p.panel_bg),
+        );
+    } else {
+        put_text(
+            b,
+            i.x,
+            i.y + 1,
+            i.width,
+            &"─".repeat(i.width as usize),
+            Style::default().fg(p.surface1).bg(p.panel_bg),
+        );
+    }
     let body = Rect::new(i.x, i.y + 2, i.width, i.height.saturating_sub(5));
     let selected = super::aggregate_navigation::navigator_selected_index(&rows, n).unwrap_or(0);
     let max = rows.len().saturating_sub(body.height as usize);
@@ -832,7 +943,7 @@ fn render_navigator_overlay(
                 .add_modifier(Modifier::DIM)
         } else if ix == selected {
             Style::default()
-                .fg(contrast(p))
+                .fg(panel_contrast_fg(p))
                 .bg(p.accent)
                 .add_modifier(Modifier::BOLD)
         } else {
@@ -1007,18 +1118,34 @@ fn render_navigator_overlay(
             Style::default().fg(p.overlay0).bg(p.panel_bg),
         );
     }
-    put_text(
-        b,
-        i.x,
-        i.bottom() - 1,
-        i.width,
-        if n.search_focused {
-            " search type · move ↑↓/ctrl+n/p · open enter · back esc"
+    if modern {
+        let hints: &[(&str, &str)] = if n.search_focused {
+            &[("↑↓", "move"), ("↵", "open"), ("esc", "back")]
         } else {
-            " ↑↓/j/k rows · ←→ workspace · / search · a/b/w/i/d filter · enter open · esc close"
-        },
-        Style::default().fg(p.overlay0).bg(p.panel_bg),
-    );
+            &[
+                ("↑↓", "rows"),
+                ("←→", "workspace"),
+                ("/", "search"),
+                ("a/b/w/i/d", "filter"),
+                ("↵", "open"),
+                ("esc", "close"),
+            ]
+        };
+        key_hints(b, Rect::new(i.x, i.bottom() - 1, i.width, 1), hints, p);
+    } else {
+        put_text(
+            b,
+            i.x,
+            i.bottom() - 1,
+            i.width,
+            if n.search_focused {
+                " search type · move ↑↓/ctrl+n/p · open enter · back esc"
+            } else {
+                " ↑↓/j/k rows · ←→ workspace · / search · a/b/w/i/d filter · enter open · esc close"
+            },
+            Style::default().fg(p.overlay0).bg(p.panel_bg),
+        );
+    }
     Some(OverlayRender {
         area: q,
         primary: Rect::default(),
@@ -1036,10 +1163,13 @@ fn render_navigator_overlay(
     })
 }
 
+/// Keybind help rows. `modern_width` (modern chrome) draws `▍ GROUP ───` headings
+/// ruled out to that width and each key as a raised cap.
 fn help_lines(
     keybinds: &LiveKeybindConfig,
     query: &str,
     palette: &Palette,
+    modern_width: Option<u16>,
 ) -> Vec<(usize, ratatui::text::Line<'static>)> {
     use ratatui::text::{Line, Span};
 
@@ -1064,6 +1194,36 @@ fn help_lines(
     }
 
     let mut lines = Vec::new();
+    if let Some(width) = modern_width {
+        let bg = Style::default().bg(palette.panel_bg);
+        for (group, entries) in groups {
+            let title = group.to_uppercase();
+            let rule = usize::from(width).saturating_sub(title.chars().count() + 5);
+            lines.push((
+                title.chars().count() + 4 + rule,
+                Line::from(vec![
+                    Span::styled(" ▍ ", bg.fg(palette.accent)),
+                    Span::styled(title, bg.fg(palette.accent).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" {}", "─".repeat(rule)), bg.fg(palette.surface1)),
+                ]),
+            ));
+            for (key, label) in entries {
+                let pad = key_width.saturating_sub(key.chars().count());
+                let width = key_width + 6 + label.chars().count();
+                lines.push((
+                    width,
+                    Line::from(vec![
+                        Span::styled("   ", bg),
+                        Span::styled(format!(" {key} "), key_cap_style(palette)),
+                        Span::styled(" ".repeat(pad + 1), bg),
+                        Span::styled(label.into_owned(), bg.fg(palette.text)),
+                    ]),
+                ));
+            }
+            lines.push((0, Line::raw("")));
+        }
+        return lines;
+    }
     for (group, entries) in groups {
         lines.push((
             group.len() + 1,
@@ -1105,25 +1265,40 @@ fn render_help_overlay(
     h: &ClientHelpOverlay,
     k: &LiveKeybindConfig,
     p: &Palette,
+    modern: bool,
 ) -> Option<OverlayRender> {
     use ratatui::widgets::{Paragraph, Widget, Wrap};
 
     let q = popup(b.area, 76, 22)?;
-    let i = panel(b, q, p.accent, p.panel_bg)?;
+    let i = titled_panel(b, q, p.accent, p.panel_bg, modern, "keybinds")?;
     if i.width < 20 || i.height < 6 {
         return None;
     }
-    put_text(
-        b,
-        i.x,
-        i.y,
-        i.width,
-        "keybinds",
-        Style::default()
-            .fg(p.text)
-            .bg(p.panel_bg)
-            .add_modifier(Modifier::BOLD),
-    );
+    if modern {
+        // The title lives on the border; this row names the prefix key instead.
+        let bg = Style::default().bg(p.panel_bg);
+        let x = put_segment(b, i.x + 1, i.y, i.right(), "prefix ", bg.fg(p.overlay1));
+        put_segment(
+            b,
+            x,
+            i.y,
+            i.right().saturating_sub(14),
+            &format!(" {} ", crate::config::format_key_combo(k.prefix)),
+            key_cap_style(p),
+        );
+    } else {
+        put_text(
+            b,
+            i.x,
+            i.y,
+            i.width,
+            "keybinds",
+            Style::default()
+                .fg(p.text)
+                .bg(p.panel_bg)
+                .add_modifier(Modifier::BOLD),
+        );
+    }
     let close = Rect::new(i.right() - 13, i.y, 13, 1);
     button(
         b,
@@ -1134,16 +1309,24 @@ fn render_help_overlay(
             " esc close "
         },
         Style::default()
-            .fg(contrast(p))
+            .fg(panel_contrast_fg(p))
             .bg(p.accent)
             .add_modifier(Modifier::BOLD),
+        modern,
     );
     let sy = i.y + 1;
+    let field_bg = if modern {
+        input_well(b, Rect::new(i.x + 1, sy, i.width.saturating_sub(2), 1), p)
+            .bg
+            .unwrap_or(p.panel_bg)
+    } else {
+        p.panel_bg
+    };
     put_text(
         b,
-        i.x,
+        i.x + u16::from(modern),
         sy,
-        i.width,
+        i.width.saturating_sub(2 * u16::from(modern)),
         &if h.search_focused {
             " / ".to_owned()
         } else {
@@ -1151,21 +1334,27 @@ fn render_help_overlay(
         },
         Style::default()
             .fg(if h.search_focused { p.text } else { p.overlay0 })
-            .bg(p.panel_bg),
+            .bg(field_bg),
     );
     let cursor = if h.search_focused {
+        let x = i.x + 3 + u16::from(modern);
         text_editor::render(
             b,
-            Rect::new(i.x + 3, sy, i.width.saturating_sub(3), 1),
+            Rect::new(x, sy, i.right().saturating_sub(x + u16::from(modern)), 1),
             &h.query,
-            Style::default().fg(p.text).bg(p.panel_bg),
+            Style::default().fg(p.text).bg(field_bg),
         )
     } else {
         None
     };
 
     let body = Rect::new(i.x, i.y + 3, i.width, i.height.saturating_sub(5));
-    let lines = help_lines(k, &h.query, p);
+    let lines = help_lines(
+        k,
+        &h.query,
+        p,
+        modern.then_some(body.width.saturating_sub(1)),
+    );
     let viewport_rows = usize::from(body.height.max(1));
     let wrapped_rows = |width: u16| {
         let width = usize::from(width.max(1));
@@ -1216,18 +1405,39 @@ fn render_help_overlay(
         }
     }
 
-    put_text(
-        b,
-        i.x,
-        i.bottom() - 1,
-        i.width,
-        if h.search_focused {
-            " edit ←→/home/end · kill ^u/^k · yank ^y · scroll ↑↓ · back esc"
+    let footer = Rect::new(i.x, i.bottom() - 1, i.width, 1);
+    if modern {
+        let hints: &[(&str, &str)] = if h.search_focused {
+            &[
+                ("←→", "edit"),
+                ("^u/^k", "kill"),
+                ("^y", "yank"),
+                ("↑↓", "scroll"),
+                ("esc", "back"),
+            ]
         } else {
-            " search / · scroll j/k/↑↓/pgup/pgdn · close esc/enter"
-        },
-        Style::default().fg(p.overlay0).bg(p.panel_bg),
-    );
+            &[
+                ("/", "search"),
+                ("j/k", "scroll"),
+                ("pgup/pgdn", "page"),
+                ("esc", "close"),
+            ]
+        };
+        key_hints(b, footer, hints, p);
+    } else {
+        put_text(
+            b,
+            footer.x,
+            footer.y,
+            footer.width,
+            if h.search_focused {
+                " edit ←→/home/end · kill ^u/^k · yank ^y · scroll ↑↓ · back esc"
+            } else {
+                " search / · scroll j/k/↑↓/pgup/pgdn · close esc/enter"
+            },
+            Style::default().fg(p.overlay0).bg(p.panel_bg),
+        );
+    }
     Some(OverlayRender {
         area: q,
         cancel: close,
@@ -1243,9 +1453,10 @@ fn render_confirm_close_overlay(
     b: &mut Buffer,
     c: &ClientConfirmCloseOverlay,
     p: &Palette,
+    modern: bool,
 ) -> Option<OverlayRender> {
     let q = popup(b.area, 64, 6)?;
-    let i = panel(b, q, p.red, p.panel_bg)?;
+    let i = panel(b, q, p.red, p.panel_bg, modern)?;
     put_text(
         b,
         i.x,
@@ -1274,9 +1485,10 @@ fn render_confirm_close_overlay(
         *ok,
         " ↵ confirm ",
         Style::default()
-            .fg(contrast(p))
+            .fg(panel_contrast_fg(p))
             .bg(p.red)
             .add_modifier(Modifier::BOLD),
+        modern,
     );
     button(
         b,
@@ -1286,6 +1498,7 @@ fn render_confirm_close_overlay(
             .fg(p.text)
             .bg(p.surface0)
             .add_modifier(Modifier::BOLD),
+        modern,
     );
     Some(OverlayRender {
         area: q,

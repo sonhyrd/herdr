@@ -1055,6 +1055,22 @@
           ]
         },
         {
+          "key": "ui.chrome",
+          "type": "enum",
+          "default": "\"modern\"",
+          "description": "Draw Herdr's chrome with rounded popups, pill tabs and status-coloured sidebar bars, or keep the classic square look.",
+          "values": [
+            "modern",
+            "classic"
+          ]
+        },
+        {
+          "key": "ui.animations",
+          "type": "boolean",
+          "default": "false",
+          "description": "Animate toasts, popups, tab switches and the working spinner on the tab bar's fleet counter. HERDR_REDUCE_MOTION=1 also turns animation off."
+        },
+        {
           "key": "ui.sidebar.agents.row_gap",
           "type": "integer",
           "default": "0",

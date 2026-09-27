@@ -13,28 +13,42 @@ pub(crate) fn render_tab_bar(
     tab_scroll: &mut usize,
     reveal_focused_tab: &mut bool,
     tab_drag_insert_index: Option<usize>,
+    spin: u8,
     hits: &mut ShellHitMap,
 ) {
     let palette = &config.palette;
+    let modern = config.chrome == crate::config::ChromeStyle::Modern;
     buffer.set_style(area, Style::default().bg(palette.panel_bg));
     let tabs = snapshot
         .tabs
         .iter()
         .filter(|tab| Some(tab.workspace_id.as_str()) == snapshot.focused_workspace_id.as_deref())
         .collect::<Vec<_>>();
-    let desired_widths = tabs
+    let content = tab_bar_content_area(snapshot, config, area);
+    let mouse_chrome = config.mouse_capture;
+    let new_tab_width = if mouse_chrome { NEW_TAB_WIDTH } else { 0 };
+    let natural_widths = tabs
         .iter()
         .enumerate()
         .map(|(index, tab)| {
-            let (prefix, glyph, label) = tab_parts(tab, index + 1, config.status_indicators);
+            let (prefix, glyph, label) = tab_parts(tab, index + 1, config, u16::MAX);
             display_width(&format!("{prefix}{glyph}{label}"))
                 .saturating_add(4)
-                .clamp(MIN_TAB_WIDTH, MAX_TAB_WIDTH)
+                .max(MIN_TAB_WIDTH)
         })
         .collect::<Vec<_>>();
-    let content = tab_bar_content_area(snapshot, area);
-    let mouse_chrome = config.mouse_capture;
-    let new_tab_width = if mouse_chrome { NEW_TAB_WIDTH } else { 0 };
+    let desired_widths = if modern {
+        let separators = tabs.len().saturating_sub(1).min(u16::MAX as usize) as u16;
+        fit_tab_widths(
+            &natural_widths,
+            content
+                .width
+                .saturating_sub(new_tab_width)
+                .saturating_sub(separators),
+        )
+    } else {
+        natural_widths
+    };
     let desired_total = desired_widths
         .iter()
         .copied()
@@ -76,7 +90,7 @@ pub(crate) fn render_tab_bar(
             hits.tab_scroll_left.x,
             content.y,
             hits.tab_scroll_left.width,
-            " < ",
+            if modern { " ‹ " } else { " < " },
             Style::default()
                 .fg(if *tab_scroll > 0 {
                     palette.overlay1
@@ -96,13 +110,13 @@ pub(crate) fn render_tab_bar(
     let mut first_visible = None;
     let mut last_visible = None;
     for (index, tab) in tabs.iter().enumerate().skip(*tab_scroll) {
-        let (prefix, glyph, label) = tab_parts(tab, index + 1, config.status_indicators);
         let desired = desired_widths[index];
         let remaining = tab_right.saturating_sub(x);
         let width = desired.min(remaining);
         if width == 0 {
             break;
         }
+        let (prefix, glyph, label) = tab_parts(tab, index + 1, config, width);
         let rect = Rect::new(x, area.y, width, 1);
         let style = if tab.focused {
             let base = Style::default()
@@ -118,20 +132,45 @@ pub(crate) fn render_tab_bar(
         } else {
             Style::default().fg(palette.overlay0).bg(palette.surface0)
         };
-        buffer.set_style(rect, style);
+        let (style, label_style, text_right) = if modern {
+            let (fill, style) = modern_tab_style(tab, palette);
+            crate::ui::pill(
+                buffer,
+                rect,
+                "",
+                fill,
+                style.fg.unwrap_or(palette.text),
+                false,
+            );
+            let label_style =
+                if tab.agent_status == crate::api::schema::AgentStatus::Blocked && !tab.focused {
+                    style.fg(palette.red).add_modifier(Modifier::BOLD)
+                } else {
+                    style
+                };
+            (style, label_style, rect.right().saturating_sub(1))
+        } else {
+            buffer.set_style(rect, style);
+            (style, style, rect.right())
+        };
         let text_width = display_width(&format!("{prefix}{glyph}{label}"));
         let mut cursor = rect.x + width.saturating_sub(text_width) / 2;
-        let glyph_style = style.fg(status_color(tab.agent_status, palette));
+        // On the accent fill a status colour (red, yellow) is unreadable.
+        let glyph_style = if tab.focused {
+            style
+        } else {
+            style.fg(status_color(tab.agent_status, palette))
+        };
         for (part, part_style) in [
             (prefix.as_str(), style),
             (glyph, glyph_style),
-            (label.as_str(), style),
+            (label.as_str(), label_style),
         ] {
             put_text(
                 buffer,
                 cursor,
                 rect.y,
-                rect.right().saturating_sub(cursor),
+                text_right.saturating_sub(cursor),
                 part,
                 part_style,
             );
@@ -154,7 +193,7 @@ pub(crate) fn render_tab_bar(
             hits.tab_scroll_right.x,
             area.y,
             hits.tab_scroll_right.width,
-            " > ",
+            if modern { " › " } else { " > " },
             Style::default()
                 .fg(if can_scroll_right {
                     palette.overlay1
@@ -234,22 +273,118 @@ pub(crate) fn render_tab_bar(
             );
         }
     }
-    render_tab_bar_status(buffer, area, snapshot, palette);
+    render_tab_bar_status(buffer, area, snapshot, config, spin);
 }
 
-pub(crate) fn tab_bar_status_width(snapshot: &ClientShellSnapshot) -> u16 {
+/// Modern tab widths: every tab at its natural width while the strip fits;
+/// on overflow the widest tabs shrink first, down to `MAX_TAB_WIDTH`.
+fn fit_tab_widths(natural: &[u16], budget: u16) -> Vec<u16> {
+    let total = |cap: u16| {
+        natural
+            .iter()
+            .map(|width| u32::from((*width).min(cap)))
+            .sum::<u32>()
+    };
+    let mut cap = natural.iter().copied().max().unwrap_or(0);
+    while cap > MAX_TAB_WIDTH && total(cap) > u32::from(budget) {
+        cap -= 1;
+    }
+    natural.iter().map(|width| (*width).min(cap)).collect()
+}
+
+/// Modern tab fill: the accent for the focused tab, otherwise surface0 faintly
+/// tinted by the accent. Status lives in the glyph colour, not the fill, and a
+/// tab with a live agent keeps full-strength text so it never reads as disabled.
+fn modern_tab_style(tab: &ClientShellTab, palette: &Palette) -> (ratatui::style::Color, Style) {
+    use crate::api::schema::AgentStatus;
+    if tab.focused {
+        return (
+            palette.accent,
+            Style::default()
+                .fg(panel_contrast_fg(palette))
+                .bg(palette.accent)
+                .add_modifier(Modifier::BOLD),
+        );
+    }
+    let fill = crate::ui::tint(palette.surface0, palette.accent, 0.12);
+    let fg = match tab.agent_status {
+        AgentStatus::Idle | AgentStatus::Unknown => palette.overlay1,
+        AgentStatus::Working | AgentStatus::Blocked | AgentStatus::Done => palette.text,
+    };
+    (fill, Style::default().fg(fg).bg(fill))
+}
+
+/// `✕2 ⠹3 ✓1`: how many spaces are blocked, working and done. Zeros are hidden.
+fn fleet_counts(
+    snapshot: &ClientShellSnapshot,
+    config: &ClientShellConfig,
+    spin: u8,
+) -> Vec<(String, crate::api::schema::AgentStatus)> {
+    use crate::api::schema::AgentStatus;
+    [
+        AgentStatus::Blocked,
+        AgentStatus::Working,
+        AgentStatus::Done,
+    ]
+    .into_iter()
+    .filter_map(|status| {
+        let count = snapshot
+            .workspaces
+            .iter()
+            .filter(|workspace| workspace.agent_status == status)
+            .count();
+        (count > 0).then(|| {
+            let glyph = status_icon_frame(
+                status,
+                crate::config::StatusIndicatorStyle::Symbols,
+                config.chrome,
+                spin,
+            );
+            (format!("{glyph}{count}"), status)
+        })
+    })
+    .collect()
+}
+
+fn fleet_width(fleet: &[(String, crate::api::schema::AgentStatus)]) -> u16 {
+    fleet
+        .iter()
+        .map(|(text, _)| display_width(text))
+        .fold(0u16, u16::saturating_add)
+        .saturating_add(fleet.len().saturating_sub(1) as u16)
+}
+
+pub(crate) fn tab_bar_status_width(
+    snapshot: &ClientShellSnapshot,
+    config: &ClientShellConfig,
+) -> u16 {
+    let modern = config.chrome == crate::config::ChromeStyle::Modern;
+    let pill_caps = if modern { 2 } else { 0 };
     let content = snapshot.tab_bar_right.iter().fold(0u16, |width, segment| {
-        width.saturating_add(display_width(&segment.text))
+        width.saturating_add(display_width(&segment.text) + pill_caps)
     });
     let separators = snapshot.tab_bar_right.len().saturating_sub(1);
-    content.saturating_add(
+    let user = content.saturating_add(
         display_width(&snapshot.tab_bar_right_separator)
             .saturating_mul(separators.min(u16::MAX as usize) as u16),
-    )
+    );
+    if !modern {
+        return user;
+    }
+    let fleet = fleet_width(&fleet_counts(snapshot, config, 0));
+    match (fleet, user) {
+        (0, user) => user,
+        (fleet, 0) => fleet,
+        (fleet, user) => fleet.saturating_add(2).saturating_add(user),
+    }
 }
 
-fn tab_bar_status_area(snapshot: &ClientShellSnapshot, area: Rect) -> Option<Rect> {
-    let width = tab_bar_status_width(snapshot);
+fn tab_bar_status_area(
+    snapshot: &ClientShellSnapshot,
+    config: &ClientShellConfig,
+    area: Rect,
+) -> Option<Rect> {
+    let width = tab_bar_status_width(snapshot, config);
     if width == 0 {
         return None;
     }
@@ -258,8 +393,12 @@ fn tab_bar_status_area(snapshot: &ClientShellSnapshot, area: Rect) -> Option<Rec
         .then(|| Rect::new(area.right().saturating_sub(width), area.y, width, 1))
 }
 
-fn tab_bar_content_area(snapshot: &ClientShellSnapshot, area: Rect) -> Rect {
-    let reserved = tab_bar_status_area(snapshot, area)
+fn tab_bar_content_area(
+    snapshot: &ClientShellSnapshot,
+    config: &ClientShellConfig,
+    area: Rect,
+) -> Rect {
+    let reserved = tab_bar_status_area(snapshot, config, area)
         .map(|status| status.width.saturating_add(1))
         .unwrap_or(0);
     Rect {
@@ -272,13 +411,40 @@ fn render_tab_bar_status(
     buffer: &mut Buffer,
     area: Rect,
     snapshot: &ClientShellSnapshot,
-    palette: &Palette,
+    config: &ClientShellConfig,
+    spin: u8,
 ) {
-    let Some(status) = tab_bar_status_area(snapshot, area) else {
+    let palette = &config.palette;
+    let Some(status) = tab_bar_status_area(snapshot, config, area) else {
         return;
     };
+    let modern = config.chrome == crate::config::ChromeStyle::Modern;
     let separator_width = display_width(&snapshot.tab_bar_right_separator);
     let mut x = status.x;
+    if modern {
+        let fleet = fleet_counts(snapshot, config, spin);
+        for (index, (text, status)) in fleet.iter().enumerate() {
+            if index > 0 {
+                x = x.saturating_add(1);
+            }
+            let width = display_width(text);
+            put_text(
+                buffer,
+                x,
+                area.y,
+                width,
+                text,
+                Style::default()
+                    .fg(status_color(*status, palette))
+                    .bg(palette.panel_bg)
+                    .add_modifier(Modifier::BOLD),
+            );
+            x = x.saturating_add(width);
+        }
+        if !fleet.is_empty() && !snapshot.tab_bar_right.is_empty() {
+            x = x.saturating_add(2);
+        }
+    }
     for (index, segment) in snapshot.tab_bar_right.iter().enumerate() {
         if index > 0 && separator_width > 0 {
             put_text(
@@ -292,6 +458,17 @@ fn render_tab_bar_status(
             x = x.saturating_add(separator_width);
         }
         let width = display_width(&segment.text);
+        if modern {
+            let (fill, fg) = if segment.accent {
+                (palette.accent, panel_contrast_fg(palette))
+            } else {
+                (palette.surface0, palette.overlay1)
+            };
+            let rect = Rect::new(x, area.y, width + 2, 1);
+            crate::ui::pill(buffer, rect, &segment.text, fill, fg, segment.accent);
+            x = x.saturating_add(width + 2);
+            continue;
+        }
         let style = if segment.accent {
             Style::default()
                 .fg(panel_contrast_fg(palette))
@@ -385,16 +562,26 @@ fn max_tab_scroll(widths: &[u16], available: u16) -> usize {
     start
 }
 
-/// `1 ◐ api-server`: position (what switch-tab and the auto label use, not the
-/// stable public `number`), status glyph, then the custom label, cut so the tab
-/// fits `MAX_TAB_WIDTH`. A label equal to the position (the auto name) is skipped.
+/// Modern: `1 ◐ api-server`: position (what switch-tab and the auto label use,
+/// not the stable public `number`), status glyph (never spun: only the fleet
+/// counter moves), then the custom label, cut so the tab fits `width`. A label
+/// equal to the position (the auto name) is skipped.
+/// Classic: the upstream label alone, never cut.
 fn tab_parts(
     tab: &ClientShellTab,
     position: usize,
-    style: crate::config::StatusIndicatorStyle,
+    config: &ClientShellConfig,
+    width: u16,
 ) -> (String, &'static str, String) {
+    if config.chrome == crate::config::ChromeStyle::Classic {
+        let mut label = tab.label.clone();
+        if tab.zoomed {
+            label.push_str(" Z");
+        }
+        return (String::new(), "", label);
+    }
     let prefix = format!("{position} ");
-    let glyph = status_icon(tab.agent_status, style);
+    let glyph = status_icon_frame(tab.agent_status, config.status_indicators, config.chrome, 0);
     let mut label = if tab.custom_label || tab.label != position.to_string() {
         format!(" {}", tab.label)
     } else {
@@ -403,7 +590,7 @@ fn tab_parts(
     if tab.zoomed {
         label.push_str(" Z");
     }
-    let budget = MAX_TAB_WIDTH.saturating_sub(4) as usize;
+    let budget = width.saturating_sub(4) as usize;
     let used = (display_width(&prefix) + display_width(glyph)) as usize;
     let label = crate::ui::truncate_end(&label, budget.saturating_sub(used));
     (prefix, glyph, label)
@@ -411,7 +598,143 @@ fn tab_parts(
 
 #[cfg(test)]
 mod tests {
-    use super::max_tab_scroll;
+    use super::*;
+    use crate::api::schema::AgentStatus;
+
+    fn render(
+        snapshot: &ClientShellSnapshot,
+        chrome: crate::config::ChromeStyle,
+    ) -> (Buffer, ShellHitMap) {
+        render_at(snapshot, chrome, 80)
+    }
+
+    fn render_at(
+        snapshot: &ClientShellSnapshot,
+        chrome: crate::config::ChromeStyle,
+        cols: u16,
+    ) -> (Buffer, ShellHitMap) {
+        let mut config = ClientShellConfig::from_config(&Config::default());
+        config.status_indicators = crate::config::StatusIndicatorStyle::Symbols;
+        config.chrome = chrome;
+        let area = Rect::new(0, 0, cols, 1);
+        let mut buffer = Buffer::empty(area);
+        let mut hits = ShellHitMap::default();
+        render_tab_bar(
+            &mut buffer,
+            area,
+            snapshot,
+            &config,
+            &mut 0,
+            &mut false,
+            None,
+            0,
+            &mut hits,
+        );
+        (buffer, hits)
+    }
+
+    fn row(buffer: &Buffer) -> String {
+        buffer.content.iter().map(|cell| cell.symbol()).collect()
+    }
+
+    fn with_tab(snapshot: &mut ClientShellSnapshot, label: &str, status: AgentStatus) {
+        let mut tab = snapshot.tabs[0].clone();
+        tab.tab_id = format!("tab_{}", snapshot.tabs.len() + 1);
+        tab.label = label.into();
+        tab.custom_label = true;
+        tab.focused = false;
+        tab.agent_status = status;
+        snapshot.tabs.push(tab);
+    }
+
+    #[test]
+    fn modern_tabs_are_pills_with_position_and_glyph() {
+        let mut snapshot = crate::client::shell::tests::snapshot();
+        with_tab(&mut snapshot, "web", AgentStatus::Blocked);
+        let (buffer, modern) = render(&snapshot, crate::config::ChromeStyle::Modern);
+        let (rect, _) = modern.tabs[1];
+        assert_eq!(buffer[(rect.x, 0)].symbol(), "▐");
+        assert_eq!(buffer[(rect.right() - 1, 0)].symbol(), "▌");
+        assert!(row(&buffer).contains("2 ✕ web"), "{}", row(&buffer));
+    }
+
+    #[test]
+    fn classic_tabs_are_the_upstream_tab_bar() {
+        let mut snapshot = crate::client::shell::tests::snapshot();
+        let long = "frontend-refactor-auth-session-handling";
+        with_tab(&mut snapshot, long, AgentStatus::Blocked);
+        let (buffer, hits) = render(&snapshot, crate::config::ChromeStyle::Classic);
+        let text = row(&buffer);
+        assert!(text.contains(long), "{text}");
+        assert!(!text.contains('✕') && !text.contains("2 "), "{text}");
+        assert_eq!(hits.tabs[1].0.width, display_width(long) + 4);
+    }
+
+    #[test]
+    fn modern_tabs_show_full_names_until_the_strip_overflows() {
+        let mut snapshot = crate::client::shell::tests::snapshot();
+        let long = "frontend-refactor-auth-session-handling";
+        with_tab(&mut snapshot, long, AgentStatus::Working);
+        let (wide, _) = render_at(&snapshot, crate::config::ChromeStyle::Modern, 150);
+        assert!(row(&wide).contains(long), "{}", row(&wide));
+
+        for _ in 0..3 {
+            with_tab(&mut snapshot, long, AgentStatus::Idle);
+        }
+        let (narrow, hits) = render_at(&snapshot, crate::config::ChromeStyle::Modern, 150);
+        assert!(!row(&narrow).contains(long), "{}", row(&narrow));
+        assert!(row(&narrow).contains('…'), "{}", row(&narrow));
+        assert!(
+            hits.tabs.iter().all(|(rect, _)| rect.width <= 36),
+            "{:?}",
+            hits.tabs
+        );
+        assert!(hits.tabs.iter().any(|(rect, _)| rect.width > MAX_TAB_WIDTH));
+    }
+
+    #[test]
+    fn fit_tab_widths_shrinks_the_widest_first_and_stops_at_the_cap() {
+        assert_eq!(fit_tab_widths(&[10, 50], 100), vec![10, 50]);
+        assert_eq!(fit_tab_widths(&[10, 50], 40), vec![10, 30]);
+        assert_eq!(fit_tab_widths(&[40, 50], 10), vec![24, 24]);
+        assert_eq!(fit_tab_widths(&[10, 12], 5), vec![10, 12]);
+    }
+
+    #[test]
+    fn focused_tab_glyph_uses_the_contrast_colour_not_the_status_colour() {
+        let mut snapshot = crate::client::shell::tests::snapshot();
+        snapshot.tabs[0].agent_status = AgentStatus::Blocked;
+        let (buffer, hits) = render(&snapshot, crate::config::ChromeStyle::Modern);
+        let rect = hits.tabs[0].0;
+        let glyph = (rect.x..rect.right())
+            .map(|x| &buffer[(x, 0)])
+            .find(|cell| cell.symbol() == "✕")
+            .expect("glyph");
+        let palette = &ClientShellConfig::from_config(&Config::default()).palette;
+        assert_eq!(glyph.fg, panel_contrast_fg(palette));
+        assert_eq!(glyph.bg, palette.accent);
+    }
+
+    #[test]
+    fn fleet_counts_hide_zero_statuses() {
+        let mut snapshot = crate::client::shell::tests::snapshot();
+        let mut working = snapshot.workspaces[0].clone();
+        working.workspace_id = "ws_2".into();
+        working.focused = false;
+        working.agent_status = AgentStatus::Working;
+        let mut done = working.clone();
+        done.workspace_id = "ws_3".into();
+        done.agent_status = AgentStatus::Done;
+        snapshot.workspaces.extend([working.clone(), working, done]);
+
+        let (buffer, _) = render(&snapshot, crate::config::ChromeStyle::Modern);
+        let text = row(&buffer);
+        assert!(text.trim_end().ends_with("◐2 ✓1"), "{text}");
+        assert!(!text.contains('✕'), "{text}");
+
+        let (classic, _) = render(&snapshot, crate::config::ChromeStyle::Classic);
+        assert!(!row(&classic).contains("✓1"));
+    }
 
     #[test]
     fn trailing_scroll_limit_accounts_for_full_widths_and_separators() {

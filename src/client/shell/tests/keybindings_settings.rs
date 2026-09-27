@@ -136,7 +136,7 @@ fn tab_bar_renders_endpoint_status_ellipses_and_clamps_to_useful_scroll() {
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect::<String>();
-    assert!(top.contains("ZOOM · host"));
+    assert!(top.contains("▐ZOOM▌ · ▐host▌"), "{top}");
     assert!(top.contains('…'));
 
     state.tab_scroll = usize::MAX;
@@ -725,7 +725,18 @@ fn help_overlay_restores_released_search_scroll_and_custom_binding_behavior() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("global"));
+    assert!(
+        text.contains("GLOBAL"),
+        "modern help headings are uppercase"
+    );
+    assert!(
+        text.contains("╭ ◆ keybinds ─"),
+        "modern popups title their border"
+    );
+    assert!(
+        text.contains("▍ GLOBAL ─"),
+        "modern section headings are ruled"
+    );
     assert!(state.hits.help_max_scroll > 0);
     assert_ne!(state.hits.help_scrollbar, Rect::default());
 
@@ -742,7 +753,7 @@ fn help_overlay_restores_released_search_scroll_and_custom_binding_behavior() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("custom"));
+    assert!(text.contains("CUSTOM"));
     assert!(text.contains("run plugin action"));
     state.handle_input_bytes(b"\x1b");
 

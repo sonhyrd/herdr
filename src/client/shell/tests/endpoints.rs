@@ -1048,7 +1048,7 @@ fn aggregate_agents_use_configured_rows_machine_token_and_status_colors() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(text.contains("○ Local · local agent"), "frame: {text}");
-    assert!(text.contains("× Build · remote agent"), "frame: {text}");
+    assert!(text.contains("✕ Build · remote agent"), "frame: {text}");
     assert!(text.contains("grouped"), "frame: {text}");
     let toggle = state.hits.agent_sort_toggle;
     assert!(!toggle.is_empty());
@@ -1070,7 +1070,7 @@ fn aggregate_agents_use_configured_rows_machine_token_and_status_colors() {
     assert!(buffer
         .content()
         .iter()
-        .any(|cell| cell.symbol() == "×" && cell.fg == state.config.palette.red));
+        .any(|cell| cell.symbol() == "✕" && cell.fg == state.config.palette.red));
 }
 
 #[test]
@@ -2004,7 +2004,7 @@ fn disconnected_active_endpoint_freezes_surface_and_marks_cached_ui_stale() {
         .content()
         .iter()
         .skip(frame.width as usize)
-        .find(|cell| cell.symbol() == "×")
+        .find(|cell| cell.symbol() == "✕")
         .expect("stale blocked icon");
     assert_eq!(stale_icon.fg, state.config.palette.overlay0);
 }

@@ -116,6 +116,15 @@ pub enum StatusIndicatorStyle {
     Symbols,
 }
 
+/// How Herdr draws its own chrome (tabs, sidebar, popups, toasts, pane borders).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ChromeStyle {
+    #[default]
+    Modern,
+    Classic,
+}
+
 impl StatusIndicatorStyle {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -969,6 +978,12 @@ pub struct UiConfig {
     _legacy_agent_panel_scope: Option<LegacyAgentPanelScopeConfig>,
     /// Agent status indicator style. Saved values are "dots" or "symbols". Default: "dots".
     pub status_indicators: StatusIndicatorStyle,
+    /// Chrome style: "modern" (rounded popups, pill tabs, status bars) or "classic". Default: "modern".
+    pub chrome: ChromeStyle,
+    /// Animate chrome (toast slide, popup fade, tab sweep, fleet-counter spinner). Default: false.
+    /// Off by default: with agents always working, a spinner means a constant repaint stream.
+    /// HERDR_REDUCE_MOTION=1 also turns animation off.
+    pub animations: bool,
     /// Expanded sidebar row composition.
     pub sidebar: SidebarConfig,
     /// Accent color for highlights, borders, and navigation UI.
@@ -1194,6 +1209,8 @@ impl Default for UiConfig {
             agent_panel_sort: AgentPanelSortConfig::Spaces,
             _legacy_agent_panel_scope: None,
             status_indicators: StatusIndicatorStyle::Dots,
+            chrome: ChromeStyle::Modern,
+            animations: false,
             sidebar: SidebarConfig::default(),
             accent: "cyan".into(),
             toast: ToastConfig::default(),
@@ -1439,6 +1456,24 @@ agent_panel_scope = "current"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.ui.agent_panel_sort, AgentPanelSortConfig::Spaces);
+    }
+
+    #[test]
+    fn chrome_defaults_to_modern_without_animations_and_parses_classic() {
+        let default = Config::default();
+        assert_eq!(default.ui.chrome, ChromeStyle::Modern);
+        assert!(!default.ui.animations);
+
+        let config: Config = toml::from_str(
+            r#"
+[ui]
+chrome = "classic"
+animations = true
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.ui.chrome, ChromeStyle::Classic);
+        assert!(config.ui.animations);
     }
 
     #[test]
